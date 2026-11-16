@@ -1,3 +1,11 @@
-openai
-streamlit
-python-dotenv
+streamlit[auth]>=1.46
+openai>=1.60
+httpx>=0.27
+python-dotenv>=1.0
+pypdf>=5.1
+python-docx>=1.1
+striprtf>=0.0.26
+beautifulsoup4>=4.12
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+bcrypt>=4.2
