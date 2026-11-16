@@ -105,6 +105,10 @@ def inject_css() -> None:
             padding-top: 2.2rem;
             padding-bottom: 4rem;
         }
+        .block-container:has(.left-rail) {
+            max-width: 1180px;
+            padding-top: 1.2rem;
+        }
         [data-testid="stAppViewContainer"] h1,
         [data-testid="stAppViewContainer"] h2,
         [data-testid="stAppViewContainer"] h3,
@@ -163,11 +167,35 @@ def inject_css() -> None:
             color: #3C3832;
             font-weight: 500;
         }
-        [data-testid="stSidebar"] {
-            background: #E5EEE9;
-            border-right: 1px solid #D3DDD7;
+        [data-testid="stSidebar"],
+        [data-testid="stExpandSidebarButton"],
+        [data-testid="stSidebarCollapseButton"] {
+            display: none !important;
         }
-        [data-testid="stSidebar"] .stButton > button {
+        [data-testid="stHorizontalBlock"]:has(.left-rail) {
+            align-items: stretch;
+            gap: 0.5rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) {
+            position: sticky;
+            top: 0;
+            align-self: flex-start;
+            height: calc(100vh - 1.4rem);
+            overflow: auto;
+            background: #E5EEE9;
+            border: 1px solid #D3DDD7;
+            border-radius: 18px;
+            padding: 0.85rem 0.85rem 1rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stVerticalBlock"] {
+            display: flex;
+            flex-direction: column;
+            min-height: 100%;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stVerticalBlock"] > div:has(.sidebar-history-anchor) {
+            margin-top: auto;
+        }
+        [data-testid="stColumn"]:has(.left-rail) .stButton > button {
             background: transparent;
             color: var(--ink);
             border: 1px solid transparent;
@@ -177,8 +205,8 @@ def inject_css() -> None:
             font-weight: 600;
             box-shadow: none;
         }
-        [data-testid="stSidebar"] .stButton > button[kind="primary"],
-        [data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-primary"] {
+        [data-testid="stColumn"]:has(.left-rail) .stButton > button[kind="primary"],
+        [data-testid="stColumn"]:has(.left-rail) .stButton > button[data-testid="stBaseButton-primary"] {
             background: var(--forest);
             color: #F6F3EC;
             border-color: var(--forest);
@@ -189,14 +217,6 @@ def inject_css() -> None:
         .brand-tag { color: var(--brass); font-size: 0.92rem; font-weight: 600; margin-top: 0.12rem; }
         .account-name { font-weight: 650; color: var(--ink); margin-top: 0.8rem; }
         .account-email { color: #24312C; font-size: 0.92rem; margin-bottom: 0.85rem; }
-        [data-testid="stSidebarUserContent"] {
-            display: flex;
-            flex-direction: column;
-            min-height: calc(100vh - 2rem);
-        }
-        [data-testid="stSidebarUserContent"] > div:has(.sidebar-history-anchor) {
-            margin-top: auto;
-        }
         .files { margin: 0.2rem 0 0.6rem; }
         .file-label {
             color: var(--forest);
@@ -404,16 +424,20 @@ def render_login() -> None:
 def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
     ensure_drafts(user, profile)
-    render_sidebar(user, profile)
-    if st.session_state.pop("just_saved", False):
-        st.success("Saved. It will be here the next time you sign in.")
-    profile = persist_complete_drafts(user.id, profile)
-    interview = current_interview(user.id)
-    st.title(practice_heading(profile, heading_interview(interview)))
-    if not profile_ready(profile):
-        st.write("Add a job description and your résumé on the left, then begin.")
-        return
-    render_practice(user, profile, interview)
+    rail, stage = st.columns([1, 1.65], gap="medium")
+    with rail:
+        st.markdown('<div class="left-rail"></div>', unsafe_allow_html=True)
+        render_sidebar(user, profile)
+    with stage:
+        if st.session_state.pop("just_saved", False):
+            st.success("Saved. It will be here the next time you sign in.")
+        profile = persist_complete_drafts(user.id, profile)
+        interview = current_interview(user.id)
+        st.title(practice_heading(profile, heading_interview(interview)))
+        if not profile_ready(profile):
+            st.write("Add a job description and your résumé on the left, then begin.")
+            return
+        render_practice(user, profile, interview)
 
 
 def practice_heading(profile: db.ProfileRecord | None, interview: db.InterviewRecord | None = None) -> str:
@@ -527,55 +551,54 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
     resume_text = current_draft(st.session_state, "resume_draft") or (profile.resume_text if profile else "")
     job_source = st.session_state.get("job_source") or (profile.job_source if profile else "")
     resume_source = st.session_state.get("resume_source") or (profile.resume_source if profile else "")
-    with st.sidebar:
-        st.markdown(BRAND, unsafe_allow_html=True)
-        st.markdown(
-            "<div class='account-name'>"
-            + html.escape(user.name or user.email)
-            + "</div><div class='account-email'>"
-            + html.escape(user.email)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<div class='files'>"
-            "<div class='file-label'>Job description</div>"
-            f"<div class='file'>{html.escape(uploaded_name(job_source, job_text, 'Pasted job description'))}</div>"
-            "<div class='file-label'>Résumé</div>"
-            f"<div class='file'>{html.escape(uploaded_name(resume_source, resume_text, 'Pasted résumé'))}</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        render_sidebar_editor(
-            user,
-            upload_label="Update job description",
-            paste_label="Job description text",
-            draft_key="job_draft",
-            source_key="job_source",
-            sig_key="job_upload_sig",
-            upload_key=f"job_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
-        )
-        render_sidebar_editor(
-            user,
-            upload_label="Update résumé",
-            paste_label="Résumé text",
-            draft_key="resume_draft",
-            source_key="resume_source",
-            sig_key="resume_upload_sig",
-            upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
-        )
-        if st.button("Save", type="primary", use_container_width=True, key="save_materials"):
-            save_materials(user.id)
-        if profile and drafts_differ(profile):
-            st.caption("Not saved yet.")
-        if st.button("Log out", type="secondary", use_container_width=True):
-            request_logout()
-        cloud_storage_notice()
-        if config.uses_local_sqlite() and not config.on_streamlit_cloud():
-            st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
-        st.markdown("<div class='sidebar-history-anchor'></div>", unsafe_allow_html=True)
-        st.markdown("<div class='history-title'>Past interviews</div>", unsafe_allow_html=True)
-        render_interview_history(user.id)
+    st.markdown(BRAND, unsafe_allow_html=True)
+    st.markdown(
+        "<div class='account-name'>"
+        + html.escape(user.name or user.email)
+        + "</div><div class='account-email'>"
+        + html.escape(user.email)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='files'>"
+        "<div class='file-label'>Job description</div>"
+        f"<div class='file'>{html.escape(uploaded_name(job_source, job_text, 'Pasted job description'))}</div>"
+        "<div class='file-label'>Résumé</div>"
+        f"<div class='file'>{html.escape(uploaded_name(resume_source, resume_text, 'Pasted résumé'))}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    render_sidebar_editor(
+        user,
+        upload_label="Update job description",
+        paste_label="Job description text",
+        draft_key="job_draft",
+        source_key="job_source",
+        sig_key="job_upload_sig",
+        upload_key=f"job_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+    )
+    render_sidebar_editor(
+        user,
+        upload_label="Update résumé",
+        paste_label="Résumé text",
+        draft_key="resume_draft",
+        source_key="resume_source",
+        sig_key="resume_upload_sig",
+        upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+    )
+    if st.button("Save", type="primary", use_container_width=True, key="save_materials"):
+        save_materials(user.id)
+    if profile and drafts_differ(profile):
+        st.caption("Not saved yet.")
+    if st.button("Log out", type="secondary", use_container_width=True):
+        request_logout()
+    cloud_storage_notice()
+    if config.uses_local_sqlite() and not config.on_streamlit_cloud():
+        st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
+    st.markdown("<div class='sidebar-history-anchor'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='history-title'>Past interviews</div>", unsafe_allow_html=True)
+    render_interview_history(user.id)
 
 
 def render_sidebar_editor(
