@@ -105,16 +105,17 @@ def complete(instructions: str, user_content, *, cache_key: str, max_output_toke
     return response_text(response)
 
 
-def generate_questions(job_description: str, resume_text: str, *, cache_key: str, client=None) -> list[str]:
+def generate_questions(job_description: str, resume_text: str, *, cache_key: str, client=None) -> prompts.InterviewScript:
+    interviewer_name = prompts.choose_interviewer_name()
     raw = complete(
         prompts.QUESTION_INSTRUCTIONS,
-        prompts.questions_input(job_description, resume_text),
+        prompts.questions_input(job_description, resume_text, interviewer_name),
         cache_key=cache_key,
         max_output_tokens=4000,
         client=client,
     )
     try:
-        return prompts.normalize_questions(prompts.parse_model_json(raw))
+        return prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise GrokError("Grok did not return interview questions. Try again.") from exc
 
@@ -128,7 +129,7 @@ def coach_answer(
     prior: list[tuple[str, str]] | None = None,
     cache_key: str,
     client=None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     raw = complete(
         prompts.COACH_INSTRUCTIONS,
         prompts.coach_input(job_description, resume_text, question, transcript, prior),
@@ -143,7 +144,7 @@ def coach_answer(
         cleaned = raw.strip()
         if not cleaned:
             raise GrokError("Grok returned an empty answer. Try again.")
-        return cleaned, "Use the answer above as a starting point, then say it in your own words."
+        return cleaned, "That already has a clear point. Next time, add the result in one sentence.", "Thanks. Let's keep going."
 
 
 def extract_document_text(data: bytes, mime: str, *, cache_key: str, client=None) -> str:

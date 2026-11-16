@@ -66,23 +66,102 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
-        .question-card {
-            background: rgba(127, 127, 127, 0.10);
+        html, body, [data-testid="stAppViewContainer"] {
+            background: #F4F1EA;
+            color: #1A1814;
+        }
+        [data-testid="stHeader"] { background: transparent; }
+        #MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; }
+        .block-container {
+            max-width: 760px;
+            padding-top: 2.4rem;
+            padding-bottom: 4rem;
+        }
+        h1, h2, h3, .studio .ask {
+            font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+            letter-spacing: -0.025em;
+            font-weight: 500;
+        }
+        h1 { font-size: 2.4rem !important; }
+        [data-testid="stCaptionContainer"] { color: #5E584F; }
+        .stButton > button, .stFormSubmitButton > button {
+            border-radius: 999px;
+            border: 1px solid #1E3A34;
+            background: #1E3A34;
+            color: #F7F4EE;
+            padding: 0.55rem 1.15rem;
+            font-weight: 560;
+        }
+        .stButton > button:hover, .stFormSubmitButton > button:hover {
+            background: #16302A;
+            color: #F7F4EE;
+            border-color: #16302A;
+        }
+        .stButton > button[kind="secondary"], .stButton > button[data-testid="stBaseButton-secondary"] {
+            background: transparent;
+            color: #1E3A34;
+        }
+        [data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input {
+            background: #FBFAF7;
+            border: 1px solid #DDD6C8;
             border-radius: 12px;
-            padding: 0.9rem 1.1rem 0.15rem;
-            margin: 0.2rem 0 0.8rem;
+            color: #1A1814;
         }
-        .question-kicker {
-            font-size: 0.8rem;
-            letter-spacing: 0.04em;
+        [data-testid="stFileUploader"] {
+            background: #FBFAF7;
+            border: 1px dashed #C9C0B0;
+            border-radius: 16px;
+            padding: 0.35rem 0.6rem 0.2rem;
+        }
+        [data-testid="stFileUploader"] section { padding: 0.4rem 0; }
+        [data-testid="stSidebar"] {
+            background: #EBE6DC;
+            border-right: 1px solid #E0D8CB;
+        }
+        div[data-testid="stRadio"] { margin-bottom: 0.4rem; }
+        .studio {
+            background: #FBFAF7;
+            border: 1px solid #E4DCCE;
+            border-radius: 22px;
+            padding: 1.35rem 1.45rem 1.15rem;
+            margin: 0.4rem 0 1rem;
+            box-shadow: 0 18px 40px rgba(48, 38, 22, 0.05);
+        }
+        .studio .who { margin-bottom: 0.85rem; }
+        .studio .name {
+            font-family: "Iowan Old Style", Palatino, Georgia, serif;
+            font-size: 1.35rem;
+            line-height: 1.2;
+        }
+        .studio .role {
+            color: #5E584F;
+            font-size: 0.92rem;
+            margin-top: 0.15rem;
+        }
+        .studio .aside {
+            color: #3F3A33;
+            font-size: 1.02rem;
+            line-height: 1.5;
+            margin: 0 0 0.85rem;
+        }
+        .studio .ask {
+            font-size: 1.72rem;
+            line-height: 1.32;
+            margin: 0 0 0.9rem;
+        }
+        .studio .count {
+            color: #7A7368;
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
-            opacity: 0.7;
-            margin-bottom: 0.35rem;
         }
-        .question-card p {
-            font-size: 1.28rem;
-            line-height: 1.45;
-            margin-bottom: 0.85rem;
+        .wordmark {
+            font-family: "Iowan Old Style", Palatino, Georgia, serif;
+            font-size: 0.95rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: #1E3A34;
+            margin-bottom: 0.35rem;
         }
         </style>
         """,
@@ -202,8 +281,9 @@ def request_logout() -> None:
 
 
 def render_login() -> None:
-    st.title("Interview Practice Assistant")
-    st.caption("Sign in to keep your résumé and job description, then practice out loud.")
+    st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
+    st.title("Come in prepared.")
+    st.caption("Your résumé and the role stay with your account.")
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
             try:
@@ -253,12 +333,13 @@ def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
     ensure_drafts(user, profile)
     render_sidebar(user, profile)
-    st.title("Interview Practice Assistant")
+    st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
+    st.title("Your interview")
     if st.session_state.pop("just_saved", False):
-        st.success("Saved. This stays with your account the next time you sign in.")
+        st.success("Saved. It will be here the next time you sign in.")
     ready = profile_ready(profile)
     if not ready:
-        st.caption("Add the job and your background. They are saved to your account.")
+        st.caption("Add the role and your résumé. They stay with your account.")
         restore_draft_widgets(st.session_state)
         render_materials(user, profile)
         return
@@ -328,14 +409,14 @@ def current_draft(state, widget_key: str) -> str:
 
 def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
     with st.sidebar:
-        st.markdown("**Interview Practice**")
+        st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
         st.write(user.name or user.email)
         st.caption(user.email)
         if st.button("Log out", use_container_width=True):
             request_logout()
         if profile_ready(profile):
-            st.caption("Job description: " + (profile.job_source or "Saved"))
-            st.caption("Background: " + (profile.resume_source or "Saved"))
+            st.caption(profile.job_source or "Role saved")
+            st.caption(profile.resume_source or "Résumé saved")
         cloud_storage_notice()
         if config.uses_local_sqlite() and not config.on_streamlit_cloud():
             st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
@@ -345,9 +426,9 @@ def render_materials(user: db.UserRecord, profile: db.ProfileRecord | None) -> N
     nonce = st.session_state.get("upload_nonce", 0)
     reader = image_reader_for(user.id)
     render_material_editor(
-        title="Job description",
+        title="The role",
         upload_label="Upload a job description",
-        paste_label="Or paste the job description",
+        paste_label="Or paste it here",
         draft_key="job_draft",
         source_key="job_source",
         sig_key="job_upload_sig",
@@ -355,17 +436,16 @@ def render_materials(user: db.UserRecord, profile: db.ProfileRecord | None) -> N
         reader=reader,
     )
     render_material_editor(
-        title="Résumé or professional background",
-        upload_label="Upload a résumé or background",
-        paste_label="Or paste your résumé or background",
+        title="Your résumé",
+        upload_label="Upload a résumé",
+        paste_label="Or paste it here",
         draft_key="resume_draft",
         source_key="resume_source",
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{nonce}",
         reader=reader,
     )
-    st.caption("PDF, Word (.docx), text, Markdown, RTF, HTML, CSV, PNG, or JPG. Older .doc files need to be saved as .docx.")
-    if st.button("Save materials", type="primary", use_container_width=True):
+    if st.button("Save", type="primary", use_container_width=True):
         save_materials(user.id)
 
 
@@ -386,7 +466,7 @@ def render_material_editor(
         type=files.UPLOAD_TYPES,
         accept_multiple_files=True,
         key=upload_key,
-        help="You can upload more than one file. Text is combined in the box below, where you can edit it.",
+        help="Add more than one file if you need to. The text appears below.",
     )
     apply_upload(uploads, sig_key, draft_key, source_key, reader)
     error = st.session_state.get(sig_key + "_error")
@@ -430,7 +510,7 @@ def save_materials(user_id: str) -> None:
     job = files.truncate(current_draft(st.session_state, "job_draft"))
     resume = files.truncate(current_draft(st.session_state, "resume_draft"))
     if not job or not resume:
-        st.error("Add both a job description and your background before saving.")
+        st.error("Add the job description and your résumé before saving.")
         return
     db.save_profile(
         user_id,
@@ -479,7 +559,7 @@ def persist_complete_drafts(user_id: str, profile: db.ProfileRecord, state=None)
 
 def render_practice(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     if drafts_differ(profile):
-        st.info("You have unsaved edits in Materials. This interview uses the last saved copy.")
+        st.info("Materials still has an unfinished edit. This interview uses the last saved copy.")
     interview = db.latest_interview(user.id)
     if interview is None:
         render_start(user, profile)
@@ -494,20 +574,18 @@ def render_practice(user: db.UserRecord, profile: db.ProfileRecord) -> None:
 
 
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
-    st.subheader("Start a practice interview")
+    st.subheader("A conversation, not a quiz")
     st.write(
-        "Grok writes questions from your saved background and the job. "
-        "Each question is shown here and read aloud. Recording starts after the question, "
-        "the transcript appears while you speak, and each answer stops at 3 minutes."
+        "She introduces herself, starts with the usual easy questions, "
+        "then asks about what this role actually depends on. You answer out loud."
     )
     if not config.xai_api_key():
         st.error(str(grok_client.GrokNotConfigured()))
         return
-    st.caption(f"Model: {config.grok_model()} · reasoning: {config.grok_effort()}")
-    if st.button("Generate questions", type="primary"):
+    if st.button("Begin interview", type="primary"):
         try:
-            with st.spinner("Writing interview questions…"):
-                questions = grok_client.generate_questions(
+            with st.spinner("Preparing your interviewer…"):
+                script = grok_client.generate_questions(
                     profile.job_description,
                     profile.resume_text,
                     cache_key=user.id,
@@ -516,7 +594,10 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 user.id,
                 profile.job_description,
                 profile.resume_text,
-                questions,
+                list(script.questions),
+                interviewer_name=script.interviewer_name,
+                interviewer_title=script.interviewer_title,
+                introduction=script.introduction,
             )
         except grok_client.GrokError as exc:
             st.error(str(exc))
@@ -525,14 +606,14 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
 
 
 def render_summary(turns: list[db.TurnRecord]) -> None:
-    st.subheader("Last interview")
+    st.subheader("Last conversation")
     for turn in turns:
         st.markdown(f"**{turn.question_text}**")
         st.caption("What you said")
         st.write(turn.transcript or "Nothing was captured.")
-        st.caption("A stronger way to say it")
+        st.caption("How an interviewer hopes to hear it")
         st.write(turn.model_answer)
-        st.caption("How to handle it")
+        st.caption("Keep this, then sharpen one thing")
         st.write(turn.guidance)
         st.divider()
 
@@ -551,8 +632,7 @@ def render_active(interview: db.InterviewRecord) -> None:
 
     index = interview.current_index
     question = questions[index]
-    st.caption("These questions use the materials saved when this interview started.")
-    question_card(index, len(questions), question)
+    question_card(interview, index, question)
     if st.button("End this interview"):
         st.session_state.confirm_restart = True
     if st.session_state.get("confirm_restart"):
@@ -576,11 +656,36 @@ def render_active(interview: db.InterviewRecord) -> None:
     show_feedback(interview, turn, index, len(questions))
 
 
-def question_card(index: int, total: int, question: str) -> None:
+def spoken_line(interview: db.InterviewRecord, index: int, question: str) -> str:
+    bridges = interview.bridges or {}
+    if index == 0:
+        lead = interview.introduction
+    else:
+        lead = bridges.get(index, "")
+    if lead:
+        return f"{lead} {question}".strip()
+    return question
+
+
+def question_card(interview: db.InterviewRecord, index: int, question: str) -> None:
+    bridges = interview.bridges or {}
+    aside = interview.introduction if index == 0 else bridges.get(index, "")
+    who = ""
+    if interview.interviewer_name:
+        who = (
+            "<div class='who'>"
+            f"<div class='name'>{html.escape(interview.interviewer_name)}</div>"
+            f"<div class='role'>{html.escape(interview.interviewer_title)}</div>"
+            "</div>"
+        )
+    aside_html = f"<p class='aside'>{html.escape(aside)}</p>" if aside else ""
     st.markdown(
-        "<div class='question-card'>"
-        f"<div class='question-kicker'>Question {index + 1} of {total}</div>"
-        f"<p>{html.escape(question)}</p></div>",
+        "<div class='studio'>"
+        f"{who}"
+        f"{aside_html}"
+        f"<p class='ask'>{html.escape(question)}</p>"
+        f"<div class='count'>{index + 1} of {len(interview.questions)}</div>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -590,12 +695,8 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
     attempt = int(st.session_state.get(f"attempt_{interview.id}_{index}", 0))
     pending = st.session_state.get(pending_key)
     if pending is None:
-        st.caption(
-            "The question is read aloud, then recording starts. Words appear as you speak. "
-            "Chrome and Edge work best. Recording stops when you pause, when you choose Done speaking, or at 3 minutes."
-        )
         token = f"{interview.id}-{index}-{attempt}"
-        result = interview_voice(question, token, MAX_ANSWER_SECONDS)
+        result = interview_voice(spoken_line(interview, index, question), token, MAX_ANSWER_SECONDS)
         if result and result.get("status") == "done":
             st.session_state[pending_key] = {
                 "transcript": (result.get("transcript") or "").strip(),
@@ -621,13 +722,13 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
     st.markdown("**What you said**")
     st.write(pending["transcript"] or "Nothing was captured.")
     try:
-        with st.spinner("Writing a model answer with Grok…"):
+        with st.spinner("Shaping a stronger answer…"):
             prior = [
                 (turn.question_text, turn.transcript)
                 for turn in db.list_turns(interview.id)
                 if turn.question_index < index
             ]
-            answer, guidance = grok_client.coach_answer(
+            answer, guidance, bridge = grok_client.coach_answer(
                 job_description=interview.job_description,
                 resume_text=interview.resume_text,
                 question=question,
@@ -644,6 +745,8 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
             guidance,
             pending.get("reason") or "",
         )
+        if index + 1 < len(interview.questions):
+            db.set_bridge(interview.id, index + 1, bridge)
     except grok_client.GrokError as exc:
         st.error(str(exc))
         if st.button("Try Grok again"):
@@ -664,9 +767,9 @@ def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int
         st.caption("Recording stopped after a pause.")
     elif turn.stop_reason == "typed":
         st.caption("This answer was typed.")
-    st.markdown("**A stronger way to say it**")
+    st.markdown("**How an interviewer hopes to hear it**")
     st.write(turn.model_answer)
-    st.markdown("**How to handle this question**")
+    st.markdown("**Keep this, then sharpen one thing**")
     st.write(turn.guidance)
     left, right = st.columns(2)
     with left:

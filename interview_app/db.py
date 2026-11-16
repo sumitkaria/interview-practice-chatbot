@@ -112,6 +112,10 @@ class InterviewRecord:
     current_index: int
     status: str
     created_at: datetime
+    interviewer_name: str = ""
+    interviewer_title: str = ""
+    introduction: str = ""
+    bridges: dict[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -186,14 +190,30 @@ def _profile(row: Profile) -> ProfileRecord:
     )
 
 
-def _interview(row: Interview) -> InterviewRecord:
+def _script_payload(raw: str) -> dict:
     try:
-        loaded = json.loads(row.questions_json or "[]")
+        loaded = json.loads(raw or "[]")
     except json.JSONDecodeError:
         loaded = []
-    if not isinstance(loaded, list):
-        loaded = []
-    questions = tuple(str(item) for item in loaded if str(item).strip())
+    if isinstance(loaded, list):
+        return {"questions": loaded, "bridges": {}}
+    if isinstance(loaded, dict):
+        loaded.setdefault("questions", [])
+        if not isinstance(loaded.get("bridges"), dict):
+            loaded["bridges"] = {}
+        return loaded
+    return {"questions": [], "bridges": {}}
+
+
+def _interview(row: Interview) -> InterviewRecord:
+    payload = _script_payload(row.questions_json)
+    questions = tuple(str(item).strip() for item in payload.get("questions") or [] if str(item).strip())
+    bridges: dict[int, str] = {}
+    for key, value in (payload.get("bridges") or {}).items():
+        try:
+            bridges[int(key)] = str(value).strip()
+        except (TypeError, ValueError):
+            continue
     return InterviewRecord(
         id=row.id,
         user_id=row.user_id,
@@ -203,6 +223,10 @@ def _interview(row: Interview) -> InterviewRecord:
         current_index=row.current_index or 0,
         status=row.status,
         created_at=row.created_at,
+        interviewer_name=str(payload.get("interviewer_name") or ""),
+        interviewer_title=str(payload.get("interviewer_title") or ""),
+        introduction=str(payload.get("introduction") or ""),
+        bridges=bridges,
     )
 
 
@@ -331,6 +355,9 @@ def create_interview(
     job_description: str,
     resume_text: str,
     questions: list[str],
+    interviewer_name: str = "",
+    interviewer_title: str = "",
+    introduction: str = "",
 ) -> InterviewRecord:
     now = utcnow()
     with session_scope() as session:
@@ -347,7 +374,15 @@ def create_interview(
             user_id=user_id,
             job_description=job_description,
             resume_text=resume_text,
-            questions_json=json.dumps(list(questions)),
+            questions_json=json.dumps(
+                {
+                    "interviewer_name": interviewer_name,
+                    "interviewer_title": interviewer_title,
+                    "introduction": introduction,
+                    "questions": list(questions),
+                    "bridges": {},
+                }
+            ),
             current_index=0,
             status="active",
             created_at=now,
@@ -374,6 +409,19 @@ def set_current_index(interview_id: str, index: int) -> None:
         row = session.get(Interview, interview_id)
         if row is not None:
             row.current_index = max(0, index)
+
+
+def set_bridge(interview_id: str, question_index: int, bridge: str) -> None:
+    text = " ".join((bridge or "").split())[:240]
+    if not text:
+        return
+    with session_scope() as session:
+        row = session.get(Interview, interview_id)
+        if row is None:
+            return
+        payload = _script_payload(row.questions_json)
+        payload["bridges"][str(question_index)] = text
+        row.questions_json = json.dumps(payload)
 
 
 def set_interview_status(interview_id: str, status: str) -> None:

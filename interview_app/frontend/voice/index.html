@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <style>
     :root {
-      --text: #111111;
-      --panel: rgba(127, 127, 127, 0.12);
-      --accent: #1f6feb;
+      --text: #1A1814;
+      --panel: #F4F1EA;
+      --accent: #1E3A34;
     }
     html, body {
       margin: 0;
@@ -29,10 +29,10 @@
     #actions { margin-top: 10px; }
     button {
       background: var(--accent);
-      color: white;
+      color: #F7F4EE;
       border: 0;
-      border-radius: 8px;
-      padding: 0.45rem 0.75rem;
+      border-radius: 999px;
+      padding: 0.5rem 0.9rem;
       margin: 0 8px 8px 0;
       font: inherit;
       cursor: pointer;
@@ -57,15 +57,15 @@
   </style>
 </head>
 <body>
-  <div id="status">Preparing the question…</div>
-  <div id="timer">3:00</div>
-  <div id="transcript"><span id="final">Your words will show up here.</span><span id="interim"></span></div>
-  <div id="actions">
-    <button id="done" type="button">Done speaking</button>
-    <button id="replay" class="secondary" type="button">Hear the question again</button>
-    <button id="start" class="secondary" type="button">Start recording now</button>
-    <button id="type" class="secondary" type="button">Type instead</button>
-  </div>
+    <div id="status">One moment.</div>
+    <div id="timer">3:00</div>
+    <div id="transcript"><span id="final">Your words will show up here.</span><span id="interim"></span></div>
+    <div id="actions">
+      <button id="done" type="button">Done speaking</button>
+      <button id="replay" class="secondary" type="button">Hear it again</button>
+      <button id="start" class="secondary" type="button">Start recording</button>
+      <button id="type" class="secondary" type="button">Type instead</button>
+    </div>
   <div id="typewrap" hidden>
     <textarea id="typearea" placeholder="Type the answer you would say out loud"></textarea>
     <button id="typesubmit" type="button">Submit typed answer</button>
@@ -243,34 +243,107 @@
     tickTimer = setTimeout(tick, 250);
   }
 
+  var preferredVoices = [
+    "Aria", "Jenny", "Sara", "Nancy", "Sonia", "Libby", "Maisie",
+    "Google UK English Female", "Google US English",
+    "Samantha", "Karen", "Moira", "Fiona", "Tessa", "Kathy", "Victoria",
+    "Serena", "Allison", "Ava", "Susan", "Zoe"
+  ];
+
+  function voiceScore(voice) {
+    var name = ((voice && voice.name) || "") + " " + ((voice && voice.voiceURI) || "");
+    var lang = ((voice && voice.lang) || "").toLowerCase();
+    if (!/^en([-_]|$)/i.test(lang)) return -1;
+    var score = 0;
+    if (/natural|neural|premium|enhanced/i.test(name)) score += 120;
+    if (/female|woman/i.test(name)) score += 40;
+    for (var i = 0; i < preferredVoices.length; i++) {
+      if (name.indexOf(preferredVoices[i]) !== -1) score += 90 - i;
+    }
+    if (/\bmale\b|david|guy\b|daniel|rishi|fred/i.test(name) && !/female/i.test(name)) score -= 60;
+    if (/compact|espeak/i.test(name)) score -= 40;
+    if (/en-gb|en-us|en-au/.test(lang)) score += 6;
+    return score;
+  }
+
+  function bestVoice() {
+    var voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+    var best = null;
+    var bestScore = -1;
+    for (var i = 0; i < voices.length; i++) {
+      var score = voiceScore(voices[i]);
+      if (score > bestScore) {
+        bestScore = score;
+        best = voices[i];
+      }
+    }
+    return best;
+  }
+
+  function spokenParts(text) {
+    var parts = String(text || "").match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+    var cleaned = [];
+    for (var i = 0; i < parts.length; i++) {
+      var piece = String(parts[i] || "").replace(/\s+/g, " ").trim();
+      if (piece) cleaned.push(piece);
+    }
+    return cleaned.length ? cleaned : [String(text || "")];
+  }
+
   function speak(text, done) {
     if (!window.speechSynthesis || !text) {
       done();
       return;
     }
-    window.speechSynthesis.cancel();
-    var utter = new SpeechSynthesisUtterance(text);
-    utter.rate = 1;
-    var voices = window.speechSynthesis.getVoices();
-    for (var i = 0; i < voices.length; i++) {
-      if (/^en/i.test(voices[i].lang)) {
-        utter.voice = voices[i];
-        break;
+    function start() {
+      window.speechSynthesis.cancel();
+      var voice = bestVoice();
+      var parts = spokenParts(text);
+      var index = 0;
+      var finishedSpeak = false;
+      function complete() {
+        if (finishedSpeak || closed) return;
+        finishedSpeak = true;
+        clearTimeout(speakWatch);
+        done();
       }
+      function sayNext() {
+        if (closed) return;
+        if (index >= parts.length) {
+          complete();
+          return;
+        }
+        var utter = new SpeechSynthesisUtterance(parts[index]);
+        index += 1;
+        utter.rate = 0.93;
+        utter.pitch = 1.04;
+        if (voice) utter.voice = voice;
+        utter.onerror = complete;
+        utter.onend = function () {
+          if (index >= parts.length) complete();
+          else setTimeout(sayNext, 180);
+        };
+        window.speechSynthesis.speak(utter);
+        if (window.speechSynthesis.resume) window.speechSynthesis.resume();
+      }
+      statusEl.textContent = "She's speaking.";
+      sayNext();
+      speakWatch = setTimeout(complete, Math.min(70000, 2200 + text.length * 78));
     }
-    var finishedSpeak = false;
-    function complete() {
-      if (finishedSpeak || closed) return;
-      finishedSpeak = true;
-      clearTimeout(speakWatch);
-      done();
+    var ready = window.speechSynthesis.getVoices();
+    if (ready && ready.length) {
+      start();
+      return;
     }
-    utter.onend = complete;
-    utter.onerror = complete;
-    statusEl.textContent = "Reading the question…";
-    window.speechSynthesis.speak(utter);
-    if (window.speechSynthesis.resume) window.speechSynthesis.resume();
-    speakWatch = setTimeout(complete, Math.min(45000, 1600 + text.length * 65));
+    var began = false;
+    function once() {
+      if (began) return;
+      began = true;
+      start();
+    }
+    window.speechSynthesis.onvoiceschanged = once;
+    window.speechSynthesis.getVoices();
+    setTimeout(once, 350);
   }
 
   function finish(reason) {
@@ -334,7 +407,7 @@
   replayBtn.addEventListener("click", function () {
     if (closed) return;
     resetAudio();
-    statusEl.textContent = "Reading the question…";
+    statusEl.textContent = "She's speaking.";
     speak(currentQuestion, startListening);
   });
   typeBtn.addEventListener("click", function () {
