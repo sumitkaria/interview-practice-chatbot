@@ -327,9 +327,9 @@ def test_extracts_common_file_types():
     assert "Led a team" in combined
     assert source == "scan.PNG, notes.md"
 
-    with pytest.raises(ValueError, match="docx"):
+    with pytest.raises(ValueError, match="could not be read"):
         files.extract_named_bytes("old.doc", b"not really a doc", None)
-    with pytest.raises(ValueError, match="supported"):
+    with pytest.raises(ValueError, match="could not be read"):
         files.extract_named_bytes("slides.pptx", b"nope", None)
 
 
