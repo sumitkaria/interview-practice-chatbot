@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import secrets
-from datetime import timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -770,6 +770,7 @@ def render_session_files(interview: db.InterviewRecord) -> None:
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     st.subheader("A conversation, not a quiz")
     st.write("You have 3 minutes for each answer. You can speak, or type.")
+    st.write("First you'll check the microphone with one short question, then talk for a couple of minutes.")
     st.write("She starts with a short picture of the role, then the questions.")
     st.write(
         "She introduces herself, then asks about the work, including situations, "
@@ -823,6 +824,12 @@ def render_summary(turns: list[db.TurnRecord]) -> None:
 
 
 def render_active(interview: db.InterviewRecord) -> None:
+    if not interview.mic_checked:
+        render_mic_check(interview)
+        return
+    if not interview.chat_done:
+        render_small_talk(interview)
+        return
     if interview.role_brief and not interview.brief_done:
         render_role_brief(interview)
         return
@@ -858,6 +865,129 @@ def render_active(interview: db.InterviewRecord) -> None:
         capture_answer(interview, index, question)
         return
     show_feedback(interview, turn, index, len(questions))
+
+
+def _chat_elapsed(started: str) -> int:
+    if not started:
+        return 0
+    try:
+        stamp = datetime.fromisoformat(started)
+    except ValueError:
+        return 0
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
+
+
+def render_mic_check(interview: db.InterviewRecord) -> None:
+    who = ""
+    if interview.interviewer_name:
+        who = (
+            "<div class='who'>"
+            f"<div class='name'>{html.escape(interview.interviewer_name)}</div>"
+            f"<div class='role'>{html.escape(interview.interviewer_title)}</div>"
+            "</div>"
+        )
+    st.markdown(
+        "<div class='studio'>"
+        f"{who}"
+        f"<p class='ask'>{html.escape(prompts.MIC_TEST_QUESTION)}</p>"
+        "<p class='aside'>This only checks the microphone. It is not an interview question.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    pending_key = f"mic_check_{interview.id}"
+    heard = st.session_state.get(pending_key)
+    if heard is None:
+        result = interview_voice(prompts.MIC_TEST_QUESTION, f"mic-{interview.id}", 45)
+        if result and result.get("status") == "done":
+            st.session_state[pending_key] = (result.get("transcript") or "").strip()
+            st.rerun()
+        with st.expander("Type a few words instead"):
+            typed = st.text_area(
+                "Microphone test",
+                key=f"mic_type_{interview.id}",
+                height=80,
+                label_visibility="collapsed",
+                placeholder="Type a few words if you are not using the microphone",
+            )
+            if st.button("Submit test", key=f"mic_type_btn_{interview.id}"):
+                st.session_state[pending_key] = (typed or "").strip()
+                st.rerun()
+        return
+    if prompts.heard_microphone(heard):
+        st.success("The microphone is working.")
+        st.write(heard)
+        if st.button("Continue", type="primary", key=f"mic_ok_{interview.id}"):
+            db.mark_mic_checked(interview.id)
+            st.rerun()
+        return
+    st.warning("Nothing came through. Try the microphone again, or type a few words.")
+    if st.button("Try the microphone again", key=f"mic_retry_{interview.id}"):
+        st.session_state.pop(pending_key, None)
+        st.rerun()
+
+
+def render_small_talk(interview: db.InterviewRecord) -> None:
+    if not interview.chat_log:
+        db.start_small_talk(interview.id, prompts.SMALL_TALK_OPENER)
+        st.rerun()
+    elapsed = _chat_elapsed(interview.chat_started_at)
+    minutes, seconds = divmod(min(elapsed, 180), 60)
+    st.caption(f"A couple of minutes to settle in. {minutes}:{seconds:02d}")
+    name = interview.interviewer_name or "She"
+    for speaker, text in interview.chat_log:
+        st.markdown(f"**{name if speaker == 'interviewer' else 'You'}**")
+        st.write(text)
+    if elapsed >= 180 and not interview.chat_wrap:
+        db.append_chat(interview.id, "interviewer", "Good. Let's get started.", wrap=True)
+        st.rerun()
+    if interview.chat_wrap or elapsed >= 180:
+        if st.button("Continue", type="primary", key=f"chat_continue_{interview.id}"):
+            db.mark_chat_done(interview.id)
+            st.rerun()
+        return
+    if st.button("Ready to begin", key=f"chat_skip_{interview.id}"):
+        db.mark_chat_done(interview.id)
+        st.rerun()
+    prompt = interview.chat_log[-1][1]
+    pending_key = f"chat_{interview.id}_{len(interview.chat_log)}"
+    pending = st.session_state.get(pending_key)
+    if pending is None:
+        result = interview_voice(prompt, pending_key, 90)
+        if result and result.get("status") == "done":
+            st.session_state[pending_key] = (result.get("transcript") or "").strip()
+            st.rerun()
+        with st.expander("Type instead"):
+            typed = st.text_area(
+                "Small talk",
+                key=f"typed_{pending_key}",
+                height=80,
+                label_visibility="collapsed",
+                placeholder="Say whatever you would say in the room",
+            )
+            if st.button("Send", key=f"send_{pending_key}"):
+                st.session_state[pending_key] = (typed or "").strip()
+                st.rerun()
+        return
+    history = list(interview.chat_log)
+    if prompts.heard_microphone(pending):
+        db.append_chat(interview.id, "you", pending)
+        history.append(("you", pending))
+    else:
+        history.append(("you", "[said nothing]"))
+    try:
+        reply, wrap = grok_client.continue_small_talk(
+            history=history,
+            elapsed_seconds=elapsed,
+            cache_key=interview.id,
+        )
+    except grok_client.GrokError:
+        wrap = elapsed >= 150
+        reply = "Good. Let's get started." if wrap else "How was the trip in?"
+    db.append_chat(interview.id, "interviewer", reply, wrap=wrap or elapsed >= 170)
+    st.session_state.pop(pending_key, None)
+    st.rerun()
 
 
 def render_role_brief(interview: db.InterviewRecord) -> None:

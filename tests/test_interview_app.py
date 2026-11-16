@@ -209,6 +209,9 @@ def test_normalize_questions_and_coach_prompt():
     assert "ask me" in script.introduction.lower()
     assert "easy" not in script.introduction.lower()
     assert len([line for line in script.role_brief.splitlines() if line.strip()]) == 5
+    assert prompts.heard_microphone("Sam, it's been a good morning")
+    assert not prompts.heard_microphone("   ")
+    assert prompts.MIC_TEST_QUESTION
     assert prompts.is_non_answer("")
     assert prompts.is_non_answer("Interesting.")
     assert prompts.is_non_answer("No worries")

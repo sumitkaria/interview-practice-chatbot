@@ -121,6 +121,11 @@ class InterviewRecord:
     resume_source: str = ""
     role_brief: str = ""
     brief_done: bool = True
+    mic_checked: bool = True
+    chat_done: bool = True
+    chat_wrap: bool = False
+    chat_started_at: str = ""
+    chat_log: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,6 +242,15 @@ def _interview(row: Interview) -> InterviewRecord:
         resume_source=str(payload.get("resume_source") or ""),
         role_brief=str(payload.get("role_brief") or ""),
         brief_done=bool(payload.get("brief_done", not payload.get("role_brief"))),
+        mic_checked=bool(payload.get("mic_checked", True)),
+        chat_done=bool(payload.get("chat_done", True)),
+        chat_wrap=bool(payload.get("chat_wrap", False)),
+        chat_started_at=str(payload.get("chat_started_at") or ""),
+        chat_log=tuple(
+            (str(item.get("speaker") or ""), str(item.get("text") or ""))
+            for item in (payload.get("chat") or [])
+            if isinstance(item, dict)
+        ),
     )
 
 
@@ -398,6 +412,11 @@ def create_interview(
                     "resume_source": resume_source,
                     "role_brief": role_brief,
                     "brief_done": False,
+                    "mic_checked": False,
+                    "chat_done": False,
+                    "chat_wrap": False,
+                    "chat_started_at": "",
+                    "chat": [],
                     "questions": list(questions),
                     "bridges": {},
                 }
@@ -445,6 +464,51 @@ def set_current_index(interview_id: str, index: int) -> None:
         row = session.get(Interview, interview_id)
         if row is not None:
             row.current_index = max(0, index)
+
+
+def _update_script(interview_id: str, change) -> None:
+    with session_scope() as session:
+        row = session.get(Interview, interview_id)
+        if row is None:
+            return
+        payload = _script_payload(row.questions_json)
+        change(payload)
+        row.questions_json = json.dumps(payload)
+
+
+def mark_mic_checked(interview_id: str) -> None:
+    _update_script(interview_id, lambda payload: payload.__setitem__("mic_checked", True))
+
+
+def start_small_talk(interview_id: str, opener: str) -> None:
+    def change(payload: dict) -> None:
+        if payload.get("chat"):
+            return
+        payload["chat"] = [{"speaker": "interviewer", "text": opener}]
+        payload["chat_started_at"] = utcnow().isoformat()
+
+    _update_script(interview_id, change)
+
+
+def append_chat(interview_id: str, speaker: str, text: str, *, wrap: bool = False) -> None:
+    spoken = " ".join((text or "").split())
+    if not spoken:
+        return
+
+    def change(payload: dict) -> None:
+        chat = payload.get("chat")
+        if not isinstance(chat, list):
+            chat = []
+        chat.append({"speaker": speaker, "text": spoken[:800]})
+        payload["chat"] = chat
+        if wrap:
+            payload["chat_wrap"] = True
+
+    _update_script(interview_id, change)
+
+
+def mark_chat_done(interview_id: str) -> None:
+    _update_script(interview_id, lambda payload: payload.__setitem__("chat_done", True))
 
 
 def mark_brief_done(interview_id: str) -> None:
