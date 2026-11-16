@@ -7,7 +7,7 @@ import secrets
 
 import streamlit as st
 
-from interview_app import auth, config, db, files, grok_client
+from interview_app import auth, config, db, files, grok_client, prompts
 from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
