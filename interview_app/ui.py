@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import secrets
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -187,13 +189,38 @@ def inject_css() -> None:
         .brand-tag { color: var(--brass); font-size: 0.92rem; font-weight: 600; margin-top: 0.12rem; }
         .account-name { font-weight: 650; color: var(--ink); margin-top: 0.8rem; }
         .account-email { color: #24312C; font-size: 0.92rem; margin-bottom: 0.85rem; }
-        .files { margin: 0.4rem 0 0.8rem; }
+        [data-testid="stSidebarUserContent"] {
+            display: flex;
+            flex-direction: column;
+            min-height: calc(100vh - 2rem);
+        }
+        [data-testid="stSidebarUserContent"] > div:has(.sidebar-history-anchor) {
+            margin-top: auto;
+        }
+        .files { margin: 0.2rem 0 0.6rem; }
+        .file-label {
+            color: var(--forest);
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-top: 0.85rem;
+        }
         .file {
             color: #14221E;
             font-weight: 650;
             font-size: 0.95rem;
             line-height: 1.35;
-            padding: 0.28rem 0;
+            padding: 0.15rem 0 0.35rem;
+            word-break: break-word;
+        }
+        .history-title {
+            color: var(--forest);
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin: 0.2rem 0 0.45rem;
         }
         .studio {
             background: var(--card);
@@ -377,27 +404,16 @@ def render_login() -> None:
 def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
     ensure_drafts(user, profile)
-    ready = profile_ready(profile)
-    if "section" not in st.session_state:
-        st.session_state.section = "Practice" if ready else "Materials"
     render_sidebar(user, profile)
-    section = st.session_state.get("section") or "Practice"
     if st.session_state.pop("just_saved", False):
         st.success("Saved. It will be here the next time you sign in.")
-    if section == "Practice" and not ready:
-        st.title("Practice")
-        st.write("Add the role and your résumé in Materials first.")
-        return
-    if section == "Materials":
-        st.title("Materials")
-        st.caption("Add the role and your résumé. They stay with your account.")
-        restore_draft_widgets(st.session_state)
-        render_materials(user, profile)
-        return
-    latest = db.latest_interview(user.id)
-    st.title(practice_heading(profile, latest))
     profile = persist_complete_drafts(user.id, profile)
-    render_practice(user, profile)
+    interview = current_interview(user.id)
+    st.title(practice_heading(profile, heading_interview(interview)))
+    if not profile_ready(profile):
+        st.write("Add a job description and your résumé on the left, then begin.")
+        return
+    render_practice(user, profile, interview)
 
 
 def practice_heading(profile: db.ProfileRecord | None, interview: db.InterviewRecord | None = None) -> str:
@@ -459,26 +475,60 @@ def current_draft(state, widget_key: str) -> str:
     return ""
 
 
+def uploaded_name(source: str, text: str, pasted_label: str) -> str:
+    if not (text or "").strip():
+        return "Nothing uploaded yet"
+    if source and source != "Pasted text":
+        return source
+    return pasted_label
+
+
+def interview_history_label(interview: db.InterviewRecord) -> str:
+    name = (interview.role_name or "").strip() or prompts.interview_name(interview.job_description)
+    if not name or name == "Practice":
+        name = "Interview"
+    if len(name) > 42:
+        name = name[:41].rstrip() + "…"
+    if interview.status == "active":
+        return f"{name} · in progress"
+    created = interview.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    local = created.astimezone(ZoneInfo("America/Edmonton"))
+    when = local.strftime("%b %d").replace(" 0", " ")
+    return f"{name} · {when}"
+
+
+def current_interview(user_id: str) -> db.InterviewRecord | None:
+    chosen = st.session_state.get("selected_interview_id")
+    if chosen:
+        interview = db.get_interview(str(chosen))
+        if interview and interview.user_id == user_id:
+            return interview
+        st.session_state.selected_interview_id = None
+    return db.latest_interview(user_id)
+
+
+def heading_interview(interview: db.InterviewRecord | None) -> db.InterviewRecord | None:
+    if interview is None:
+        return None
+    selected = st.session_state.get("selected_interview_id")
+    if selected and interview.id == selected:
+        return interview
+    if interview.status == "active":
+        return interview
+    return None
+
+
 def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
-    section = st.session_state.get("section") or "Practice"
+    remember_drafts(st.session_state)
+    restore_draft_widgets(st.session_state)
+    job_text = current_draft(st.session_state, "job_draft") or (profile.job_description if profile else "")
+    resume_text = current_draft(st.session_state, "resume_draft") or (profile.resume_text if profile else "")
+    job_source = st.session_state.get("job_source") or (profile.job_source if profile else "")
+    resume_source = st.session_state.get("resume_source") or (profile.resume_source if profile else "")
     with st.sidebar:
         st.markdown(BRAND, unsafe_allow_html=True)
-        if st.button(
-            "Practice",
-            type="primary" if section == "Practice" else "secondary",
-            use_container_width=True,
-            key="nav_practice",
-        ):
-            st.session_state.section = "Practice"
-            st.rerun()
-        if st.button(
-            "Materials",
-            type="primary" if section == "Materials" else "secondary",
-            use_container_width=True,
-            key="nav_materials",
-        ):
-            st.session_state.section = "Materials"
-            st.rerun()
         st.markdown(
             "<div class='account-name'>"
             + html.escape(user.name or user.email)
@@ -487,83 +537,89 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
             + "</div>",
             unsafe_allow_html=True,
         )
-        if profile_ready(profile):
-            job_name = profile.job_source if profile.job_source and profile.job_source != "Pasted text" else "Job description"
-            resume_name = (
-                profile.resume_source
-                if profile.resume_source and profile.resume_source != "Pasted text"
-                else "Résumé"
-            )
-            st.markdown(
-                "<div class='files'>"
-                f"<div class='file'>{html.escape(job_name)}</div>"
-                f"<div class='file'>{html.escape(resume_name)}</div>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            "<div class='files'>"
+            "<div class='file-label'>Job description</div>"
+            f"<div class='file'>{html.escape(uploaded_name(job_source, job_text, 'Pasted job description'))}</div>"
+            "<div class='file-label'>Résumé</div>"
+            f"<div class='file'>{html.escape(uploaded_name(resume_source, resume_text, 'Pasted résumé'))}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        render_sidebar_editor(
+            user,
+            upload_label="Update job description",
+            paste_label="Job description text",
+            draft_key="job_draft",
+            source_key="job_source",
+            sig_key="job_upload_sig",
+            upload_key=f"job_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+        )
+        render_sidebar_editor(
+            user,
+            upload_label="Update résumé",
+            paste_label="Résumé text",
+            draft_key="resume_draft",
+            source_key="resume_source",
+            sig_key="resume_upload_sig",
+            upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+        )
+        if st.button("Save", type="primary", use_container_width=True, key="save_materials"):
+            save_materials(user.id)
+        if profile and drafts_differ(profile):
+            st.caption("Not saved yet.")
         if st.button("Log out", type="secondary", use_container_width=True):
             request_logout()
         cloud_storage_notice()
         if config.uses_local_sqlite() and not config.on_streamlit_cloud():
             st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
+        st.markdown("<div class='sidebar-history-anchor'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='history-title'>Past interviews</div>", unsafe_allow_html=True)
+        render_interview_history(user.id)
 
 
-def render_materials(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
-    nonce = st.session_state.get("upload_nonce", 0)
-    reader = image_reader_for(user.id)
-    render_material_editor(
-        title="The role",
-        upload_label="Upload a job description",
-        paste_label="Or paste it here",
-        draft_key="job_draft",
-        source_key="job_source",
-        sig_key="job_upload_sig",
-        upload_key=f"job_files_{user.id}_{nonce}",
-        reader=reader,
-    )
-    render_material_editor(
-        title="Your résumé",
-        upload_label="Upload a résumé",
-        paste_label="Or paste it here",
-        draft_key="resume_draft",
-        source_key="resume_source",
-        sig_key="resume_upload_sig",
-        upload_key=f"resume_files_{user.id}_{nonce}",
-        reader=reader,
-    )
-    if st.button("Save", type="primary", use_container_width=True):
-        save_materials(user.id)
-
-
-def render_material_editor(
+def render_sidebar_editor(
+    user: db.UserRecord,
     *,
-    title: str,
     upload_label: str,
     paste_label: str,
     draft_key: str,
     source_key: str,
     sig_key: str,
     upload_key: str,
-    reader,
 ) -> None:
-    st.subheader(title)
     uploads = st.file_uploader(
         upload_label,
         accept_multiple_files=True,
         key=upload_key,
         help="10MB max file size",
     )
-    apply_upload(uploads, sig_key, draft_key, source_key, reader)
+    apply_upload(uploads, sig_key, draft_key, source_key, image_reader_for(user.id))
     error = st.session_state.get(sig_key + "_error")
     if error:
         st.error(error)
-    st.text_area(paste_label, key=draft_key, height=220)
-    draft = st.session_state.get(draft_key) or ""
-    source = st.session_state.get(source_key) or ""
-    if source:
-        st.caption(f"{source} · {len(draft):,} characters")
-    elif draft:
-        st.caption(f"{len(draft):,} characters")
+    with st.expander("Edit the text"):
+        st.text_area(paste_label, key=draft_key, height=140, label_visibility="collapsed")
+
+
+def render_interview_history(user_id: str) -> None:
+    interviews = db.list_interviews(user_id)
+    if not interviews:
+        st.caption("No interviews yet.")
+        return
+    selected = st.session_state.get("selected_interview_id")
+    latest = interviews[0]
+    for interview in interviews:
+        active = interview.id == selected or (not selected and interview.id == latest.id and interview.status == "active")
+        if st.button(
+            interview_history_label(interview),
+            key=f"history_{interview.id}",
+            type="primary" if active else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state.selected_interview_id = interview.id
+            st.session_state.confirm_restart = False
+            st.rerun()
 
 
 def image_reader_for(user_id: str):
@@ -642,22 +698,26 @@ def persist_complete_drafts(user_id: str, profile: db.ProfileRecord, state=None)
     return saved
 
 
-def render_practice(user: db.UserRecord, profile: db.ProfileRecord) -> None:
+def render_practice(
+    user: db.UserRecord,
+    profile: db.ProfileRecord,
+    interview: db.InterviewRecord | None,
+) -> None:
     if drafts_differ(profile):
-        st.info("Materials still has an unfinished edit. This interview uses the last saved copy.")
-    interview = db.latest_interview(user.id)
+        st.info("The left side still has an unsaved edit. This interview uses the last saved copy.")
     if interview is None:
         render_start(user, profile)
         return
-    if interview.status == "completed" or st.session_state.get("interview_saved_id") == interview.id:
-        st.session_state.confirm_restart = False
-        st.success("Your interview is saved.")
-        turns = db.list_turns(interview.id)
-        if turns:
-            render_summary(turns)
-        render_start(user, profile)
+    if interview.status == "active" and st.session_state.get("interview_saved_id") != interview.id:
+        render_active(interview)
         return
-    render_active(interview)
+    st.session_state.confirm_restart = False
+    if st.session_state.get("interview_saved_id") == interview.id:
+        st.success("Your interview is saved.")
+    turns = db.list_turns(interview.id)
+    if turns:
+        render_summary(turns)
+    render_start(user, profile)
 
 
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
@@ -677,7 +737,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                     profile.resume_text,
                     cache_key=user.id,
                 )
-            db.create_interview(
+            created = db.create_interview(
                 user.id,
                 profile.job_description,
                 profile.resume_text,
@@ -687,6 +747,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 introduction=script.introduction,
                 role_name=script.role_name or prompts.interview_name(profile.job_description),
             )
+            st.session_state.selected_interview_id = created.id
         except grok_client.GrokError as exc:
             st.error(str(exc))
             return

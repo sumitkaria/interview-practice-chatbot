@@ -395,6 +395,23 @@ def create_interview(
         return _interview(interview)
 
 
+def get_interview(interview_id: str) -> InterviewRecord | None:
+    with session_scope() as session:
+        row = session.get(Interview, interview_id)
+        return _interview(row) if row else None
+
+
+def list_interviews(user_id: str, limit: int = 30) -> list[InterviewRecord]:
+    with session_scope() as session:
+        rows = session.scalars(
+            select(Interview)
+            .where(Interview.user_id == user_id)
+            .order_by(Interview.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [_interview(row) for row in rows]
+
+
 def latest_interview(user_id: str) -> InterviewRecord | None:
     with session_scope() as session:
         row = session.scalar(
