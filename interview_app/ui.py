@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import secrets
-from datetime import datetime, timezone
+from datetime import timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -770,7 +770,7 @@ def render_session_files(interview: db.InterviewRecord) -> None:
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     st.subheader("A conversation, not a quiz")
     st.write("You have 3 minutes for each answer. You can speak, or type.")
-    st.write("First you'll check the microphone with one short question, then talk for a couple of minutes.")
+    st.write("First you'll check the microphone, then she'll ask how your day is going.")
     st.write("She starts with a short picture of the role, then the questions.")
     st.write(
         "She introduces herself, then asks about the work, including situations, "
@@ -867,18 +867,6 @@ def render_active(interview: db.InterviewRecord) -> None:
     show_feedback(interview, turn, index, len(questions))
 
 
-def _chat_elapsed(started: str) -> int:
-    if not started:
-        return 0
-    try:
-        stamp = datetime.fromisoformat(started)
-    except ValueError:
-        return 0
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    return max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
-
-
 def render_mic_check(interview: db.InterviewRecord) -> None:
     who = ""
     if interview.interviewer_name:
@@ -932,22 +920,16 @@ def render_small_talk(interview: db.InterviewRecord) -> None:
     if not interview.chat_log:
         db.start_small_talk(interview.id, prompts.SMALL_TALK_OPENER)
         st.rerun()
-    elapsed = _chat_elapsed(interview.chat_started_at)
-    minutes, seconds = divmod(min(elapsed, 180), 60)
-    st.caption(f"A couple of minutes to settle in. {minutes}:{seconds:02d}")
     name = interview.interviewer_name or "She"
     for speaker, text in interview.chat_log:
         st.markdown(f"**{name if speaker == 'interviewer' else 'You'}**")
         st.write(text)
-    if elapsed >= 180 and not interview.chat_wrap:
-        db.append_chat(interview.id, "interviewer", "Good. Let's get started.", wrap=True)
-        st.rerun()
-    if interview.chat_wrap or elapsed >= 180:
+    if interview.chat_wrap:
         if st.button("Continue", type="primary", key=f"chat_continue_{interview.id}"):
             db.mark_chat_done(interview.id)
             st.rerun()
         return
-    if st.button("Ready to begin", key=f"chat_skip_{interview.id}"):
+    if st.button("Skip", key=f"chat_skip_{interview.id}"):
         db.mark_chat_done(interview.id)
         st.rerun()
     prompt = interview.chat_log[-1][1]
@@ -977,15 +959,13 @@ def render_small_talk(interview: db.InterviewRecord) -> None:
     else:
         history.append(("you", "[said nothing]"))
     try:
-        reply, wrap = grok_client.continue_small_talk(
+        reply = grok_client.continue_small_talk(
             history=history,
-            elapsed_seconds=elapsed,
             cache_key=interview.id,
         )
     except grok_client.GrokError:
-        wrap = elapsed >= 150
-        reply = "Good. Let's get started." if wrap else "How was the trip in?"
-    db.append_chat(interview.id, "interviewer", reply, wrap=wrap or elapsed >= 170)
+        reply = "Glad to hear it."
+    db.append_chat(interview.id, "interviewer", reply, wrap=True)
     st.session_state.pop(pending_key, None)
     st.rerun()
 
