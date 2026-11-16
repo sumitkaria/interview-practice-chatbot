@@ -1,5 +1,6 @@
 import io
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,17 @@ def test_interview_name_comes_from_the_job_description():
     assert labeled == "Senior Analyst at Northwind"
     assert prompts.interview_name("We are seeking a product manager to join the team.") == "product manager"
     assert prompts.interview_name("") == "Practice"
+    interview = db.InterviewRecord(
+        id="1",
+        user_id="u",
+        job_description="CFO, Capital Markets\nATB Financial\n",
+        resume_text="resume",
+        questions=("Tell me about yourself.",),
+        current_index=0,
+        status="active",
+        created_at=datetime.now(timezone.utc),
+    )
+    assert ui.practice_heading(None, interview) == "CFO, Capital Markets at ATB Financial"
 
 
 def test_normalize_questions_and_coach_prompt():
