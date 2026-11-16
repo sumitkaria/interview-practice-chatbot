@@ -374,7 +374,7 @@ def render_app(user: db.UserRecord) -> None:
     if st.session_state.pop("just_saved", False):
         st.success("Saved. It will be here the next time you sign in.")
     if section == "Practice" and not ready:
-        st.title("Your interview")
+        st.title("Practice")
         st.write("Add the role and your résumé in Materials first.")
         return
     if section == "Materials":
@@ -383,9 +383,22 @@ def render_app(user: db.UserRecord) -> None:
         restore_draft_widgets(st.session_state)
         render_materials(user, profile)
         return
-    st.title("Your interview")
+    latest = db.latest_interview(user.id)
+    st.title(practice_heading(profile, latest))
     profile = persist_complete_drafts(user.id, profile)
     render_practice(user, profile)
+
+
+def practice_heading(profile: db.ProfileRecord | None, interview: db.InterviewRecord | None = None) -> str:
+    if interview is not None:
+        named = (interview.role_name or "").strip()
+        if not named and interview.job_description.strip():
+            named = prompts.interview_name(interview.job_description)
+        if named and named != "Practice":
+            return named
+    if profile is not None and profile.job_description.strip():
+        return prompts.interview_name(profile.job_description)
+    return "Practice"
 
 
 def profile_ready(profile: db.ProfileRecord | None) -> bool:
@@ -626,7 +639,9 @@ def render_practice(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     if interview is None:
         render_start(user, profile)
         return
-    if interview.status == "completed":
+    if interview.status == "completed" or st.session_state.get("interview_saved_id") == interview.id:
+        st.session_state.confirm_restart = False
+        st.success("Your interview is saved.")
         turns = db.list_turns(interview.id)
         if turns:
             render_summary(turns)
@@ -660,6 +675,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 interviewer_name=script.interviewer_name,
                 interviewer_title=script.interviewer_title,
                 introduction=script.introduction,
+                role_name=script.role_name or prompts.interview_name(profile.job_description),
             )
         except grok_client.GrokError as exc:
             st.error(str(exc))
@@ -684,9 +700,8 @@ def render_active(interview: db.InterviewRecord) -> None:
     questions = interview.questions
     if not questions:
         st.error("This interview has no questions. Start a new one.")
-        if st.button("End this interview"):
-            db.set_interview_status(interview.id, "completed")
-            st.rerun()
+        if st.button("End this interview", key=f"end_empty_{interview.id}"):
+            finish_interview(interview.id)
         return
     if interview.current_index >= len(questions):
         db.set_interview_status(interview.id, "completed")
@@ -695,14 +710,11 @@ def render_active(interview: db.InterviewRecord) -> None:
     index = interview.current_index
     question = questions[index]
     question_card(interview, index, question)
-    if st.button("End this interview"):
-        st.session_state.confirm_restart = True
-    if st.session_state.get("confirm_restart"):
-        st.warning("Ending keeps the answers you already finished and leaves your saved materials in place.")
-        if st.button("Yes, end it"):
-            db.set_interview_status(interview.id, "completed")
-            st.session_state.confirm_restart = False
-            st.rerun()
+    if st.button("End this interview", key=f"end_{interview.id}"):
+        st.session_state.confirm_restart = interview.id
+    if st.session_state.get("confirm_restart") == interview.id:
+        if st.button("Yes, end it", key=f"yes_end_{interview.id}"):
+            finish_interview(interview.id)
 
     earlier = [turn for turn in db.list_turns(interview.id) if turn.question_index < index]
     if earlier:
@@ -846,6 +858,13 @@ def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int
         elif st.button("Finish interview", type="primary"):
             db.set_interview_status(interview.id, "completed")
             st.rerun()
+
+
+def finish_interview(interview_id: str) -> None:
+    db.set_interview_status(interview_id, "completed")
+    st.session_state.confirm_restart = False
+    st.session_state.interview_saved_id = interview_id
+    st.rerun()
 
 
 def discard_attempt(interview_id: str, index: int, attempt: int) -> None:

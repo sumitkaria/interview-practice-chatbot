@@ -27,8 +27,11 @@ You prepare a spoken mock interview led by a woman. She is a real interviewer, n
 Use the interviewer name given in the candidate packet. Do not change it.
 Choose the title she would actually hold for this hire: a senior manager of this function at this organization. If the company is named, include it. If it is not, name the function only. Examples of the shape, not the words to copy: "Director of Analytics, Northwind" or "Engineering Manager, Payments".
 
-Return only a JSON object with the keys "title", "introduction", and "questions".
+Return only a JSON object with the keys "role", "title", "introduction", and "questions".
 No markdown fences.
+
+role:
+The name of this interview, taken from the job description. Use the job title and the organization when it is named, such as "CFO, Capital Markets at ATB". Do not include the word "interview".
 
 introduction:
 Two or three sentences she says before any question. She gives her name and title, welcomes the candidate, and sets an easy tone. No question in the introduction.
@@ -108,6 +111,76 @@ class InterviewScript:
     interviewer_title: str
     introduction: str
     questions: tuple[str, ...]
+    role_name: str = ""
+
+
+def _clean_role_name(value: str) -> str:
+    name = re.sub(r"\s+", " ", value).strip(" -–:.")
+    name = re.sub(r"\binterview\b", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s+", " ", name).strip(" -–:,")
+    return name[:90]
+
+
+def interview_name(job_description: str) -> str:
+    """A short name for the practice session, taken from the job description."""
+    text = (job_description or "").strip()
+    if not text:
+        return "Practice"
+    lines = []
+    for raw in text.splitlines():
+        line = re.sub(r"\s+", " ", raw).strip(" \t-•*")
+        if line:
+            lines.append(line)
+    title = ""
+    company = ""
+    labeled_title = re.compile(
+        r"^(?:job title|position title|position|role|title)\s*[:\-–]\s*(.+)$",
+        re.IGNORECASE,
+    )
+    labeled_company = re.compile(
+        r"^(?:company|organization|organisation|employer)\s*[:\-–]\s*(.+)$",
+        re.IGNORECASE,
+    )
+    for line in lines[:40]:
+        match = labeled_title.match(line)
+        if match and not title:
+            title = match.group(1).strip()
+            continue
+        match = labeled_company.match(line)
+        if match and not company:
+            company = match.group(1).strip()
+    if not title:
+        for line in lines[:10]:
+            if re.match(
+                r"^(about|overview|the role|job description|responsibilities|requirements|qualifications)\b",
+                line,
+                re.IGNORECASE,
+            ):
+                continue
+            if len(line) > 70 or len(line.split()) > 14 or line.endswith("."):
+                continue
+            title = line
+            break
+    if title and not company:
+        for index, line in enumerate(lines[:12]):
+            if line == title or line.endswith(title):
+                if index + 1 < len(lines):
+                    nxt = lines[index + 1]
+                    if 1 <= len(nxt.split()) <= 6 and not nxt.endswith("."):
+                        if not re.match(r"^(about|reports|location|department)\b", nxt, re.IGNORECASE):
+                            company = nxt
+                break
+    if not title:
+        seeking = re.search(r"\b(?:seeking|hiring)\s+(?:an?\s+)?([A-Za-z][^.\n]{2,60})", text, re.IGNORECASE)
+        if seeking:
+            title = re.split(r"\s+(?:to|who|with|for)\b", seeking.group(1), maxsplit=1, flags=re.IGNORECASE)[0]
+    title = _clean_role_name(title)
+    company = _clean_role_name(company)
+    if company.lower().startswith("at "):
+        company = company[3:].strip()
+    if title and company and company.lower() not in title.lower():
+        title = f"{title} at {company}"
+    return title[:90] or "Practice"
 
 
 def choose_interviewer_name() -> str:
@@ -125,6 +198,7 @@ def normalize_interview(payload: Any, interviewer_name: str) -> InterviewScript:
     if not isinstance(payload, dict):
         raise ValueError("The model did not return questions.")
     name = interviewer_name.strip() or choose_interviewer_name()
+    role_name = _clean_role_name(str(payload.get("role") or payload.get("role_name") or ""))
     title = re.sub(r"\s+", " ", str(payload.get("title") or payload.get("interviewer_title") or "")).strip()
     title = (title or "Hiring Manager")[:120]
     introduction = re.sub(r"\s+", " ", str(payload.get("introduction") or "")).strip()
@@ -155,7 +229,7 @@ def normalize_interview(payload: Any, interviewer_name: str) -> InterviewScript:
         unique.append(question[:500])
         if len(unique) == 7:
             break
-    return InterviewScript(name, title, introduction[:500], tuple(unique))
+    return InterviewScript(name, title, introduction[:500], tuple(unique), role_name)
 
 
 def questions_input(job_description: str, resume_text: str, interviewer_name: str) -> str:

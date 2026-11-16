@@ -116,6 +116,7 @@ class InterviewRecord:
     interviewer_title: str = ""
     introduction: str = ""
     bridges: dict[int, str] | None = None
+    role_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -227,6 +228,7 @@ def _interview(row: Interview) -> InterviewRecord:
         interviewer_title=str(payload.get("interviewer_title") or ""),
         introduction=str(payload.get("introduction") or ""),
         bridges=bridges,
+        role_name=str(payload.get("role_name") or ""),
     )
 
 
@@ -358,6 +360,7 @@ def create_interview(
     interviewer_name: str = "",
     interviewer_title: str = "",
     introduction: str = "",
+    role_name: str = "",
 ) -> InterviewRecord:
     now = utcnow()
     with session_scope() as session:
@@ -379,6 +382,7 @@ def create_interview(
                     "interviewer_name": interviewer_name,
                     "interviewer_title": interviewer_title,
                     "introduction": introduction,
+                    "role_name": role_name,
                     "questions": list(questions),
                     "bridges": {},
                 }

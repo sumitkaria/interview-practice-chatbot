@@ -148,6 +148,17 @@ def test_interview_keeps_a_snapshot_and_isolates_users():
     assert db.list_turns(first.id) == []
 
 
+def test_interview_name_comes_from_the_job_description():
+    posted = prompts.interview_name(
+        "CFO, Capital Markets\nATB Financial\n\nThe CFO leads the capital markets business."
+    )
+    assert posted == "CFO, Capital Markets at ATB Financial"
+    labeled = prompts.interview_name("Job Title: Senior Analyst\nCompany: Northwind\n\nAbout the role.")
+    assert labeled == "Senior Analyst at Northwind"
+    assert prompts.interview_name("We are seeking a product manager to join the team.") == "product manager"
+    assert prompts.interview_name("") == "Practice"
+
+
 def test_normalize_questions_and_coach_prompt():
     script = prompts.normalize_interview(
         {
