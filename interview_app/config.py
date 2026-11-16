@@ -56,6 +56,10 @@ def data_dir() -> Path:
     return path
 
 
+class DatabaseURLError(ValueError):
+    """DATABASE_URL is present but is not a usable Postgres address."""
+
+
 def normalize_database_url(url: str) -> str:
     cleaned = url.strip()
     if cleaned.startswith("postgres://"):
@@ -67,10 +71,81 @@ def normalize_database_url(url: str) -> str:
     return cleaned
 
 
+def _postgres_candidates(text: str) -> list[str]:
+    markers = ("postgresql+psycopg://", "postgresql://", "postgres://")
+    found: list[str] = []
+    start = 0
+    lowered = text.lower()
+    while start < len(text):
+        positions = [lowered.find(marker, start) for marker in markers]
+        positions = [pos for pos in positions if pos >= 0]
+        if not positions:
+            break
+        begin = min(positions)
+        end = begin
+        while end < len(text) and text[end] not in " \t\r\n\"'":
+            end += 1
+        candidate = text[begin:end].rstrip(".,);")
+        if candidate:
+            found.append(candidate)
+        start = max(end, begin + 1)
+    return found
+
+
+def _host_labels_ok(host: str) -> bool:
+    if not host or any(char.isspace() for char in host):
+        return False
+    labels = host.split(".")
+    if labels[-1] == "":
+        labels = labels[:-1]
+    return bool(labels) and all(labels)
+
+
+def prepare_database_url(raw: str) -> str:
+    """Turn a Streamlit secret into a driver URL, or explain why it cannot connect."""
+    text = raw.strip().strip('"').strip("'").strip()
+    candidates = _postgres_candidates(text) or [text]
+    usable: list[str] = []
+    saw_dotted_host = False
+    for candidate in candidates:
+        normalized = normalize_database_url(candidate)
+        try:
+            from sqlalchemy.engine.url import make_url
+
+            parsed = make_url(normalized)
+        except Exception:
+            continue
+        host = parsed.host or ""
+        if host.startswith(".") or ".." in host:
+            saw_dotted_host = True
+            stripped = host.lstrip(".")
+            if parsed.username and parsed.password and _host_labels_ok(stripped):
+                normalized = parsed.set(host=stripped).render_as_string(hide_password=False)
+                host = stripped
+            else:
+                continue
+        if _host_labels_ok(host) and "." in host:
+            usable.append(normalized)
+    if usable:
+        return usable[-1]
+    if saw_dotted_host:
+        raise DatabaseURLError(
+            "DATABASE_URL still contains the sample dots, so the database address starts with a period. "
+            "In Streamlit secrets, replace the whole DATABASE_URL value with the line from Neon. "
+            "Open the Neon project, click Connect, and copy the line that starts with postgresql://. "
+            "Paste that entire line between the quotes, save, and reboot."
+        )
+    raise DatabaseURLError(
+        "DATABASE_URL is not a complete Postgres connection string. "
+        "Open the Neon project, click Connect, and copy the line that starts with postgresql://. "
+        "Paste that entire line between the quotes in Streamlit secrets, save, and reboot."
+    )
+
+
 def database_url() -> str:
     configured = secret("DATABASE_URL")
     if configured:
-        return normalize_database_url(configured)
+        return prepare_database_url(configured)
     path = data_dir() / "interview.db"
     return "sqlite:///" + path.resolve().as_posix()
 

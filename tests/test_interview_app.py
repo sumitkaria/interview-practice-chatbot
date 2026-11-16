@@ -199,6 +199,31 @@ def test_database_url_normalization():
     assert config.normalize_database_url("postgresql+psycopg://host/db") == "postgresql+psycopg://host/db"
 
 
+def test_prepare_database_url_rejects_sample_dots():
+    with pytest.raises(config.DatabaseURLError, match="sample dots"):
+        config.prepare_database_url("postgresql://...the line you copied...")
+    with pytest.raises(config.DatabaseURLError, match="sample dots"):
+        config.prepare_database_url("postgresql://...ep-cool.us-east-2.aws.neon.tech/neondb?sslmode=require")
+
+
+def test_prepare_database_url_keeps_a_real_neon_string():
+    raw = (
+        "postgresql://neondb_owner:secret@ep-cool.us-east-2.aws.neon.tech/neondb"
+        "?sslmode=require&channel_binding=require"
+    )
+    prepared = config.prepare_database_url(f'"{raw}"')
+    assert prepared.startswith("postgresql+psycopg://neondb_owner:secret@ep-cool.us-east-2.aws.neon.tech/neondb")
+    assert "channel_binding=require" in prepared
+
+
+def test_prepare_database_url_fixes_a_leading_dot_when_credentials_exist():
+    prepared = config.prepare_database_url(
+        "postgresql://neondb_owner:secret@.ep-cool.us-east-2.aws.neon.tech/neondb?sslmode=require"
+    )
+    assert "@ep-cool.us-east-2.aws.neon.tech/" in prepared
+    assert "@.ep-cool" not in prepared
+
+
 def test_extracts_common_file_types():
     text = files.extract_named_bytes("notes.txt", b"\xef\xbb\xbfHiring manager\n", None)
     assert text == "Hiring manager"
