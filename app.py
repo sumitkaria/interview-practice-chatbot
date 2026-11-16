@@ -1,8 +1,8 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="Interview Practice Assistant",
-    page_icon="💼",
+    page_title="Interview Practice",
+    page_icon="interview_app/brand/mark.png",
     layout="centered",
 )
 
