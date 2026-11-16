@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root {
+      --text: #111111;
+      --panel: rgba(127, 127, 127, 0.12);
+      --accent: #1f6feb;
+    }
+    html, body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+      background: transparent;
+    }
+    body { padding: 2px 2px 8px; }
+    #status { font-size: 0.95rem; margin-bottom: 4px; }
+    #timer { font-variant-numeric: tabular-nums; font-size: 1.35rem; font-weight: 650; margin-bottom: 8px; }
+    #transcript {
+      min-height: 7.5rem;
+      padding: 0.75rem;
+      border-radius: 10px;
+      background: var(--panel);
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    #interim { opacity: 0.72; }
+    #actions { margin-top: 10px; }
+    button {
+      background: var(--accent);
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 0.45rem 0.75rem;
+      margin: 0 8px 8px 0;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: inherit;
+      border: 1px solid rgba(127, 127, 127, 0.5);
+    }
+    textarea {
+      width: 100%;
+      min-height: 6rem;
+      box-sizing: border-box;
+      margin-top: 4px;
+      font: inherit;
+      color: inherit;
+      background: var(--panel);
+      border: 1px solid rgba(127, 127, 127, 0.4);
+      border-radius: 8px;
+      padding: 0.6rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">Preparing the question…</div>
+  <div id="timer">3:00</div>
+  <div id="transcript"><span id="final">Your words will show up here.</span><span id="interim"></span></div>
+  <div id="actions">
+    <button id="done" type="button">Done speaking</button>
+    <button id="replay" class="secondary" type="button">Hear the question again</button>
+    <button id="start" class="secondary" type="button">Start recording now</button>
+    <button id="type" class="secondary" type="button">Type instead</button>
+  </div>
+  <div id="typewrap" hidden>
+    <textarea id="typearea" placeholder="Type the answer you would say out loud"></textarea>
+    <button id="typesubmit" type="button">Submit typed answer</button>
+  </div>
+<script>
+(function () {
+  var statusEl = document.getElementById("status");
+  var timerEl = document.getElementById("timer");
+  var finalEl = document.getElementById("final");
+  var interimEl = document.getElementById("interim");
+  var doneBtn = document.getElementById("done");
+  var replayBtn = document.getElementById("replay");
+  var startBtn = document.getElementById("start");
+  var typeBtn = document.getElementById("type");
+  var typeWrap = document.getElementById("typewrap");
+  var typeArea = document.getElementById("typearea");
+  var typeSubmit = document.getElementById("typesubmit");
+
+  var currentQuestion = "";
+  var maxMs = 180000;
+  var activeToken = null;
+  var recognition = null;
+  var finalText = "";
+  var interim = "";
+  var listening = false;
+  var closed = false;
+  var sent = false;
+  var allowRestart = false;
+  var startedAt = 0;
+  var tickTimer = null;
+  var silenceTimer = null;
+  var speakWatch = null;
+
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
+  }
+
+  function setValue(value) {
+    send("streamlit:setComponentValue", { value: value, dataType: "json" });
+  }
+
+  function setHeight() {
+    send("streamlit:setFrameHeight", { height: Math.max(document.body.scrollHeight, 280) });
+  }
+
+  function applyTheme(theme) {
+    if (!theme) return;
+    var root = document.documentElement;
+    if (theme.textColor) root.style.setProperty("--text", theme.textColor);
+    if (theme.secondaryBackgroundColor) root.style.setProperty("--panel", theme.secondaryBackgroundColor);
+    if (theme.primaryColor) root.style.setProperty("--accent", theme.primaryColor);
+    if (theme.font) document.body.style.fontFamily = theme.font;
+  }
+
+  function format(ms) {
+    var total = Math.max(0, Math.ceil(ms / 1000));
+    var minutes = Math.floor(total / 60);
+    var seconds = total % 60;
+    return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+  }
+
+  function remainingMs() {
+    if (!startedAt) return maxMs;
+    return Math.max(0, maxMs - (Date.now() - startedAt));
+  }
+
+  function renderTranscript() {
+    if (!finalText && !interim) finalEl.textContent = "Your words will show up here.";
+    else finalEl.textContent = finalText;
+    interimEl.textContent = interim;
+    setHeight();
+  }
+
+  function wordCount(text) {
+    var match = String(text || "").trim().match(/\S+/g);
+    return match ? match.length : 0;
+  }
+
+  function bumpSilence() {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(function () {
+      if (!closed && wordCount(finalText + " " + interim) >= 8) finish("silence");
+    }, 10000);
+  }
+
+  function syncButtons() {
+    startBtn.hidden = listening || closed;
+  }
+
+  function foldInterim() {
+    if (interim) {
+      finalText += interim + " ";
+      interim = "";
+      renderTranscript();
+    }
+  }
+
+  function wire(instance) {
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.lang = "en-US";
+    instance.onresult = function (event) {
+      if (sent) return;
+      interim = "";
+      for (var i = event.resultIndex; i < event.results.length; i++) {
+        var piece = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += piece + " ";
+        else interim += piece;
+      }
+      renderTranscript();
+      bumpSilence();
+    };
+    instance.onerror = function (event) {
+      if (!event || event.error === "no-speech" || event.error === "aborted") return;
+      if (event.error === "not-allowed") {
+        statusEl.textContent = "Allow the microphone, or type your answer.";
+        typeWrap.hidden = false;
+        listening = false;
+        syncButtons();
+        setHeight();
+      }
+    };
+    instance.onend = function () {
+      foldInterim();
+      if (!allowRestart || closed || !listening) return;
+      if (remainingMs() <= 0) {
+        finish("time");
+        return;
+      }
+      try { instance.start(); }
+      catch (err) {}
+    };
+  }
+
+  function startListening() {
+    if (listening || closed) return;
+    var Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) {
+      statusEl.textContent = "This browser can't transcribe speech. Type your answer instead.";
+      typeWrap.hidden = false;
+      syncButtons();
+      setHeight();
+      return;
+    }
+    if (!recognition) {
+      recognition = new Ctor();
+      wire(recognition);
+    }
+    listening = true;
+    allowRestart = true;
+    if (!startedAt) startedAt = Date.now();
+    try {
+      recognition.start();
+    } catch (err) {
+      listening = false;
+      statusEl.textContent = "Allow the microphone, or type your answer.";
+      typeWrap.hidden = false;
+      syncButtons();
+      setHeight();
+      return;
+    }
+    statusEl.textContent = "Listening. A 10 second pause ends the answer.";
+    syncButtons();
+    tick();
+  }
+
+  function tick() {
+    if (closed || !listening) return;
+    var left = remainingMs();
+    timerEl.textContent = format(left);
+    if (left <= 0) {
+      finish("time");
+      return;
+    }
+    tickTimer = setTimeout(tick, 250);
+  }
+
+  function speak(text, done) {
+    if (!window.speechSynthesis || !text) {
+      done();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    var utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1;
+    var voices = window.speechSynthesis.getVoices();
+    for (var i = 0; i < voices.length; i++) {
+      if (/^en/i.test(voices[i].lang)) {
+        utter.voice = voices[i];
+        break;
+      }
+    }
+    var finishedSpeak = false;
+    function complete() {
+      if (finishedSpeak || closed) return;
+      finishedSpeak = true;
+      clearTimeout(speakWatch);
+      done();
+    }
+    utter.onend = complete;
+    utter.onerror = complete;
+    statusEl.textContent = "Reading the question…";
+    window.speechSynthesis.speak(utter);
+    if (window.speechSynthesis.resume) window.speechSynthesis.resume();
+    speakWatch = setTimeout(complete, Math.min(45000, 1600 + text.length * 65));
+  }
+
+  function finish(reason) {
+    if (closed) return;
+    closed = true;
+    allowRestart = false;
+    listening = false;
+    clearTimeout(tickTimer);
+    clearTimeout(silenceTimer);
+    clearTimeout(speakWatch);
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (recognition) {
+      try { recognition.stop(); } catch (err) {}
+    }
+    statusEl.textContent = "Sending your answer…";
+    syncButtons();
+    setTimeout(function () {
+      sent = true;
+      var transcript = (finalText + " " + interim).replace(/\s+/g, " ").trim();
+      setValue({
+        status: "done",
+        reason: reason,
+        transcript: transcript,
+        nonce: String(Date.now())
+      });
+    }, 400);
+  }
+
+  function resetAudio() {
+    clearTimeout(tickTimer);
+    clearTimeout(silenceTimer);
+    clearTimeout(speakWatch);
+    allowRestart = false;
+    listening = false;
+    if (recognition) {
+      try { recognition.abort(); } catch (err) {}
+    }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }
+
+  function begin() {
+    closed = false;
+    sent = false;
+    finalText = "";
+    interim = "";
+    startedAt = 0;
+    typeWrap.hidden = true;
+    typeArea.value = "";
+    timerEl.textContent = format(maxMs);
+    renderTranscript();
+    syncButtons();
+    speak(currentQuestion, startListening);
+  }
+
+  doneBtn.addEventListener("click", function () { finish("manual"); });
+  startBtn.addEventListener("click", function () {
+    clearTimeout(speakWatch);
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    startListening();
+  });
+  replayBtn.addEventListener("click", function () {
+    if (closed) return;
+    resetAudio();
+    statusEl.textContent = "Reading the question…";
+    speak(currentQuestion, startListening);
+  });
+  typeBtn.addEventListener("click", function () {
+    if (closed) return;
+    resetAudio();
+    typeWrap.hidden = false;
+    statusEl.textContent = "Type your answer, then submit it.";
+    syncButtons();
+    setHeight();
+    typeArea.focus();
+  });
+  typeSubmit.addEventListener("click", function () {
+    finalText = typeArea.value;
+    interim = "";
+    finish("typed");
+  });
+
+  function onRender(data) {
+    applyTheme(data.theme);
+    var args = data.args || {};
+    currentQuestion = String(args.question || "");
+    maxMs = Math.max(10, Number(args.maxSeconds) || 180) * 1000;
+    var token = String(args.questionToken || "");
+    if (token && token === activeToken) {
+      setHeight();
+      return;
+    }
+    activeToken = token;
+    resetAudio();
+    begin();
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    onRender(event.data);
+  });
+  send("streamlit:componentReady", { apiVersion: 1 });
+  setHeight();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; height: 0; overflow: hidden; }
+  </style>
+</head>
+<body>
+<script>
+(function () {
+  var COOKIE = "ip_session";
+  var STORAGE = "ip_session_event";
+
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
+  }
+
+  function setValue(value) {
+    send("streamlit:setComponentValue", { value: value, dataType: "json" });
+  }
+
+  function readCookie() {
+    var prefix = COOKIE + "=";
+    var parts = document.cookie ? document.cookie.split(";") : [];
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i].replace(/^\s+/, "");
+      if (part.indexOf(prefix) === 0) return part.slice(prefix.length);
+    }
+    return "";
+  }
+
+  function secureSuffix() {
+    return window.location.protocol === "https:" ? "; Secure" : "";
+  }
+
+  function writeCookie(token, maxAge) {
+    document.cookie = COOKIE + "=" + token + "; Path=/; Max-Age=" + String(maxAge) + "; SameSite=Lax" + secureSuffix();
+  }
+
+  function clearCookie() {
+    document.cookie = COOKIE + "=; Path=/; Max-Age=0; SameSite=Lax" + secureSuffix();
+  }
+
+  function alreadyReported(stamp) {
+    try { return window.sessionStorage.getItem(STORAGE) === stamp; }
+    catch (err) { return false; }
+  }
+
+  function markReported(stamp) {
+    try { window.sessionStorage.setItem(STORAGE, stamp); }
+    catch (err) {}
+  }
+
+  function onRender(data) {
+    var args = data.args || {};
+    var action = args.action;
+    if (action === "set") {
+      var token = String(args.token || "");
+      if (!/^[A-Za-z0-9_-]+\.[a-f0-9]+$/.test(token)) return;
+      var stamp = "set:" + token;
+      if (readCookie() !== token) writeCookie(token, Number(args.maxAge) || 2592000);
+      if (!alreadyReported(stamp)) {
+        markReported(stamp);
+        setValue({ ok: true, action: "set", nonce: String(args.nonce || "") });
+      }
+    } else if (action === "clear") {
+      var clearStamp = "clear:" + String(args.nonce || "");
+      if (readCookie()) clearCookie();
+      if (!alreadyReported(clearStamp)) {
+        markReported(clearStamp);
+        setValue({ ok: true, action: "clear", nonce: String(args.nonce || "") });
+      }
+    }
+    send("streamlit:setFrameHeight", { height: 0 });
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    onRender(event.data);
+  });
+  send("streamlit:componentReady", { apiVersion: 1 });
+  send("streamlit:setFrameHeight", { height: 0 });
+})();
+</script>
+</body>
+</html>
