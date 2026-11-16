@@ -116,7 +116,18 @@ def test_google_account_links_existing_email_and_can_be_new():
 def test_interview_keeps_a_snapshot_and_isolates_users():
     user = auth.register_user("Case", "case@example.com", "long-password")
     other = auth.register_user("Other", "other2@example.com", "long-password")
-    first = db.create_interview(user.id, "Job A", "Resume A", ["Tell me about yourself.", "Why this role?"])
+    first = db.create_interview(
+        user.id,
+        "Job A",
+        "Resume A",
+        ["Tell me about yourself.", "Why this role?"],
+        interviewer_name="Amelia Ward",
+        interviewer_title="Director of Analytics",
+        introduction="Hi, I'm Amelia Ward.",
+    )
+    assert first.interviewer_name == "Amelia Ward"
+    db.set_bridge(first.id, 1, "That was clear. Let's stay with the role.")
+    assert db.latest_interview(user.id).bridges[1].startswith("That was clear")
     db.save_turn(first.id, 0, "Tell me about yourself.", "I lead teams", "I lead product teams.", "Keep the example.", "manual")
     db.set_current_index(first.id, 1)
     saved = db.get_turn(first.id, 0)
@@ -138,17 +149,24 @@ def test_interview_keeps_a_snapshot_and_isolates_users():
 
 
 def test_normalize_questions_and_coach_prompt():
-    questions = prompts.normalize_questions(
-        {"questions": ["2) Why this role?", "Tell me about yourself.", "Why this role?"]}
+    script = prompts.normalize_interview(
+        {
+            "title": "Director of Analytics, Northwind",
+            "introduction": "Hi, I'm Amelia Ward. I lead analytics at Northwind.",
+            "questions": ["2) Why this role?", "Tell me about yourself.", "Why this role?"],
+        },
+        interviewer_name="Amelia Ward",
     )
-    assert questions[0] == "Tell me about yourself."
-    assert questions[1] == "Why this role?"
-    assert len(questions) == 2
+    assert script.interviewer_name == "Amelia Ward"
+    assert script.questions[0] == "Tell me about yourself."
+    assert script.questions[1] == "Why this role?"
+    assert len(script.questions) == 2
 
     fenced = prompts.parse_model_json('```json\n{"answer": "I did", "guidance": "Add a result"}\n```')
-    answer, guidance = prompts.coach_from_payload(fenced, "")
+    answer, guidance, bridge = prompts.coach_from_payload(fenced, "")
     assert answer == "I did"
     assert "result" in guidance
+    assert bridge
 
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
@@ -163,8 +181,9 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.delenv("GROK_REASONING_EFFORT", raising=False)
     client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"]}')
-    questions = grok_client.generate_questions("job", "resume", cache_key="user-1", client=client)
-    assert questions[0] == "Tell me about yourself."
+    script = grok_client.generate_questions("job", "resume", cache_key="user-1", client=client)
+    assert script.questions[0] == "Tell me about yourself."
+    assert script.interviewer_name in prompts.INTERVIEWER_NAMES
     sent = client.responses.kwargs
     assert sent["model"] == "grok-4.7"
     assert sent["reasoning"] == {"effort": "low"}
@@ -172,7 +191,7 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     assert sent["prompt_cache_key"] == "user-1"
 
     coach = FakeClient('Sure. {"answer": "I built the hiring workflow.", "guidance": "Lead with the result."}')
-    answer, guidance = grok_client.coach_answer(
+    answer, guidance, bridge = grok_client.coach_answer(
         job_description="job",
         resume_text="resume",
         question="Tell me about yourself.",
@@ -182,6 +201,7 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     )
     assert answer == "I built the hiring workflow."
     assert guidance == "Lead with the result."
+    assert bridge
 
 
 def test_missing_grok_key(monkeypatch):
