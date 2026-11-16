@@ -150,35 +150,26 @@ def coach_answer(
 def continue_small_talk(
     *,
     history: list[tuple[str, str]],
-    elapsed_seconds: int,
     cache_key: str,
     client=None,
-) -> tuple[str, bool]:
+) -> str:
     lines = []
-    for speaker, text in history[-8:]:
+    for speaker, text in history[-4:]:
         who = "Interviewer" if speaker == "interviewer" else "Candidate"
         lines.append(f"{who}: {text}")
-    note = "Time is up. Close the small talk." if elapsed_seconds >= 150 else "Keep the small talk going."
     raw = complete(
         prompts.SMALL_TALK_INSTRUCTIONS,
-        "CONVERSATION SO FAR:\n" + ("\n".join(lines) or "None.") + f"\n\nNOTE:\n{note}\n",
+        "CONVERSATION SO FAR:\n" + ("\n".join(lines) or "None.") + "\n",
         cache_key=cache_key,
-        max_output_tokens=500,
+        max_output_tokens=200,
         client=client,
     )
     try:
         payload = prompts.parse_model_json(raw)
     except (ValueError, TypeError, json.JSONDecodeError):
-        reply = raw.strip() or "That's a nice way to start. How was the trip in?"
-        return reply, elapsed_seconds >= 150
-    reply = ""
-    wrap = elapsed_seconds >= 170
-    if isinstance(payload, dict):
-        reply = str(payload.get("reply") or "").strip()
-        wrap = bool(payload.get("wrap_up")) or wrap
-    if not reply:
-        reply = "Good. Let's get started." if wrap else "Tell me a little more about that."
-    return reply, wrap
+        return "Glad to hear it."
+    reply = str(payload.get("reply") or "").strip() if isinstance(payload, dict) else ""
+    return reply or "Glad to hear it."
 
 
 def answer_candidate_question(
