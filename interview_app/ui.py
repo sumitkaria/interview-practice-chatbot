@@ -62,107 +62,142 @@ def main() -> None:
     render_app(user)
 
 
+BRAND = """
+<div class="brand">
+  <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
+    <rect width="48" height="48" rx="12" fill="#1B3A34"/>
+    <path d="M11 16.5h13.2c2.6 0 4.3 1.6 4.3 3.9 0 2.2-1.6 3.7-4 3.9l-2.2 4.2-1.2-4.1H11c-2.4 0-4-1.6-4-3.9s1.6-4 4-4z" fill="#F3E6C8"/>
+    <path d="M23.2 23.2h12.2c2.3 0 3.8 1.4 3.8 3.4 0 1.9-1.4 3.3-3.5 3.4l-1.8 3.6-1.1-3.5h-6.2c-2.1 0-3.5-1.4-3.5-3.4 0-2 1.5-3.5 3.1-3.5z" fill="#B8893D"/>
+  </svg>
+  <div class="brand-copy">
+    <div class="brand-name">Interview Practice</div>
+    <div class="brand-tag">Arrive ready.</div>
+  </div>
+</div>
+"""
+
+
 def inject_css() -> None:
     st.markdown(
         """
         <style>
-        html, body, [data-testid="stAppViewContainer"] {
-            background: #F4F1EA;
-            color: #1A1814;
+        @import url("https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap");
+        :root {
+            --ink: #1C1917;
+            --forest: #1B3A34;
+            --brass: #A6843D;
+            --paper: #F6F3EC;
+            --card: #FFFcf7;
+            --line: #D9D1C3;
+            --font: "Source Sans 3", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        }
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+            background: var(--paper);
+            color: var(--ink);
+            font-family: var(--font);
         }
         [data-testid="stHeader"] { background: transparent; }
         #MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; }
         .block-container {
             max-width: 760px;
-            padding-top: 2.4rem;
+            padding-top: 2.2rem;
             padding-bottom: 4rem;
         }
-        h1, h2, h3, .studio .ask {
-            font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-            letter-spacing: -0.025em;
-            font-weight: 500;
+        [data-testid="stAppViewContainer"] h1,
+        [data-testid="stAppViewContainer"] h2,
+        [data-testid="stAppViewContainer"] h3,
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] label,
+        [data-testid="stAppViewContainer"] button,
+        [data-testid="stAppViewContainer"] input,
+        [data-testid="stAppViewContainer"] textarea,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] button {
+            font-family: var(--font);
         }
-        h1 { font-size: 2.4rem !important; }
-        [data-testid="stCaptionContainer"] { color: #5E584F; }
-        .stButton > button, .stFormSubmitButton > button {
+        h1 {
+            color: var(--ink);
+            font-size: 2.15rem !important;
+            font-weight: 650 !important;
+            letter-spacing: -0.03em;
+        }
+        h2, h3 { color: var(--ink); font-weight: 650; letter-spacing: -0.02em; }
+        [data-testid="stCaptionContainer"] { color: #3C3832; }
+        [data-testid="stMain"] .stButton > button,
+        [data-testid="stMain"] .stFormSubmitButton > button {
             border-radius: 999px;
-            border: 1px solid #1E3A34;
-            background: #1E3A34;
-            color: #F7F4EE;
-            padding: 0.55rem 1.15rem;
-            font-weight: 560;
+            border: 1px solid var(--forest);
+            background: var(--forest);
+            color: #F6F3EC;
+            font-weight: 600;
         }
-        .stButton > button:hover, .stFormSubmitButton > button:hover {
-            background: #16302A;
-            color: #F7F4EE;
-            border-color: #16302A;
-        }
-        .stButton > button[kind="secondary"], .stButton > button[data-testid="stBaseButton-secondary"] {
-            background: transparent;
-            color: #1E3A34;
+        [data-testid="stMain"] .stButton > button:hover,
+        [data-testid="stMain"] .stFormSubmitButton > button:hover {
+            background: #142E29;
+            color: #F6F3EC;
+            border-color: #142E29;
         }
         [data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input {
-            background: #FBFAF7;
-            border: 1px solid #DDD6C8;
+            background: var(--card);
+            border: 1px solid var(--line);
             border-radius: 12px;
-            color: #1A1814;
+            color: var(--ink);
         }
         [data-testid="stFileUploader"] {
-            background: #FBFAF7;
-            border: 1px dashed #C9C0B0;
+            background: var(--card);
+            border: 1px dashed #C4BBA9;
             border-radius: 16px;
             padding: 0.35rem 0.6rem 0.2rem;
         }
-        [data-testid="stFileUploader"] section { padding: 0.4rem 0; }
         [data-testid="stSidebar"] {
-            background: #EBE6DC;
-            border-right: 1px solid #E0D8CB;
+            background: #E5EEE9;
+            border-right: 1px solid #D3DDD7;
         }
-        div[data-testid="stRadio"] { margin-bottom: 0.4rem; }
-        .studio {
-            background: #FBFAF7;
-            border: 1px solid #E4DCCE;
-            border-radius: 22px;
-            padding: 1.35rem 1.45rem 1.15rem;
-            margin: 0.4rem 0 1rem;
-            box-shadow: 0 18px 40px rgba(48, 38, 22, 0.05);
+        [data-testid="stSidebar"] .stButton > button {
+            background: transparent;
+            color: var(--ink);
+            border: 1px solid transparent;
+            border-radius: 10px;
+            text-align: left;
+            justify-content: flex-start;
+            font-weight: 600;
+            box-shadow: none;
         }
-        .studio .who { margin-bottom: 0.85rem; }
-        .studio .name {
-            font-family: "Iowan Old Style", Palatino, Georgia, serif;
-            font-size: 1.35rem;
-            line-height: 1.2;
+        [data-testid="stSidebar"] .stButton > button[kind="primary"],
+        [data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-primary"] {
+            background: var(--forest);
+            color: #F6F3EC;
+            border-color: var(--forest);
         }
-        .studio .role {
-            color: #5E584F;
-            font-size: 0.92rem;
-            margin-top: 0.15rem;
-        }
-        .studio .aside {
-            color: #3F3A33;
-            font-size: 1.02rem;
-            line-height: 1.5;
-            margin: 0 0 0.85rem;
-        }
-        .studio .ask {
-            font-size: 1.72rem;
-            line-height: 1.32;
-            margin: 0 0 0.9rem;
-        }
-        .studio .count {
-            color: #7A7368;
-            font-size: 0.78rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }
-        .wordmark {
-            font-family: "Iowan Old Style", Palatino, Georgia, serif;
+        .brand { display: flex; gap: 0.75rem; align-items: center; margin: 0.2rem 0 1rem; }
+        .brand .mark { width: 42px; height: 42px; flex: none; }
+        .brand-name { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); line-height: 1.15; }
+        .brand-tag { color: var(--brass); font-size: 0.92rem; font-weight: 600; margin-top: 0.12rem; }
+        .account-name { font-weight: 650; color: var(--ink); margin-top: 0.8rem; }
+        .account-email { color: #24312C; font-size: 0.92rem; margin-bottom: 0.85rem; }
+        .files { margin: 0.4rem 0 0.8rem; }
+        .file {
+            color: #14221E;
+            font-weight: 650;
             font-size: 0.95rem;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            color: #1E3A34;
-            margin-bottom: 0.35rem;
+            line-height: 1.35;
+            padding: 0.28rem 0;
         }
+        .studio {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--brass);
+            border-radius: 18px;
+            padding: 1.25rem 1.35rem 1.05rem;
+            margin: 0.2rem 0 1rem;
+        }
+        .studio .who { margin-bottom: 0.75rem; }
+        .studio .name { font-size: 1.2rem; font-weight: 700; line-height: 1.2; color: var(--ink); }
+        .studio .role { color: var(--forest); font-weight: 600; font-size: 0.95rem; margin-top: 0.12rem; }
+        .studio .aside { color: #2E3330; font-size: 1.02rem; line-height: 1.5; margin: 0 0 0.8rem; }
+        .studio .ask { font-size: 1.65rem; font-weight: 650; line-height: 1.3; letter-spacing: -0.03em; margin: 0 0 0.85rem; color: var(--ink); }
+        .studio .count { color: var(--brass); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -281,8 +316,7 @@ def request_logout() -> None:
 
 
 def render_login() -> None:
-    st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
-    st.title("Come in prepared.")
+    st.markdown(BRAND, unsafe_allow_html=True)
     st.caption("Your résumé and the role stay with your account.")
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
@@ -332,32 +366,26 @@ def render_login() -> None:
 def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
     ensure_drafts(user, profile)
+    ready = profile_ready(profile)
+    if "section" not in st.session_state:
+        st.session_state.section = "Practice" if ready else "Materials"
     render_sidebar(user, profile)
-    st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
-    st.title("Your interview")
+    section = st.session_state.get("section") or "Practice"
     if st.session_state.pop("just_saved", False):
         st.success("Saved. It will be here the next time you sign in.")
-    ready = profile_ready(profile)
-    if not ready:
+    if section == "Practice" and not ready:
+        st.title("Your interview")
+        st.write("Add the role and your résumé in Materials first.")
+        return
+    if section == "Materials":
+        st.title("Materials")
         st.caption("Add the role and your résumé. They stay with your account.")
         restore_draft_widgets(st.session_state)
         render_materials(user, profile)
         return
-    if "section" not in st.session_state:
-        st.session_state.section = "Practice"
-    section = st.radio(
-        "Section",
-        ["Practice", "Materials"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="section",
-    )
-    if section == "Materials":
-        restore_draft_widgets(st.session_state)
-        render_materials(user, profile)
-    else:
-        profile = persist_complete_drafts(user.id, profile)
-        render_practice(user, profile)
+    st.title("Your interview")
+    profile = persist_complete_drafts(user.id, profile)
+    render_practice(user, profile)
 
 
 def profile_ready(profile: db.ProfileRecord | None) -> bool:
@@ -408,15 +436,49 @@ def current_draft(state, widget_key: str) -> str:
 
 
 def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
+    section = st.session_state.get("section") or "Practice"
     with st.sidebar:
-        st.markdown("<div class='wordmark'>Interview Practice</div>", unsafe_allow_html=True)
-        st.write(user.name or user.email)
-        st.caption(user.email)
-        if st.button("Log out", use_container_width=True):
-            request_logout()
+        st.markdown(BRAND, unsafe_allow_html=True)
+        if st.button(
+            "Practice",
+            type="primary" if section == "Practice" else "secondary",
+            use_container_width=True,
+            key="nav_practice",
+        ):
+            st.session_state.section = "Practice"
+            st.rerun()
+        if st.button(
+            "Materials",
+            type="primary" if section == "Materials" else "secondary",
+            use_container_width=True,
+            key="nav_materials",
+        ):
+            st.session_state.section = "Materials"
+            st.rerun()
+        st.markdown(
+            "<div class='account-name'>"
+            + html.escape(user.name or user.email)
+            + "</div><div class='account-email'>"
+            + html.escape(user.email)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
         if profile_ready(profile):
-            st.caption(profile.job_source or "Role saved")
-            st.caption(profile.resume_source or "Résumé saved")
+            job_name = profile.job_source if profile.job_source and profile.job_source != "Pasted text" else "Job description"
+            resume_name = (
+                profile.resume_source
+                if profile.resume_source and profile.resume_source != "Pasted text"
+                else "Résumé"
+            )
+            st.markdown(
+                "<div class='files'>"
+                f"<div class='file'>{html.escape(job_name)}</div>"
+                f"<div class='file'>{html.escape(resume_name)}</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        if st.button("Log out", type="secondary", use_container_width=True):
+            request_logout()
         cloud_storage_notice()
         if config.uses_local_sqlite() and not config.on_streamlit_cloud():
             st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
