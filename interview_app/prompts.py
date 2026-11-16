@@ -112,6 +112,23 @@ QUESTION_LIMIT = 25
 
 CANDIDATE_OPENING = "That's the end of my questions. What would you like to ask me?"
 
+MIC_TEST_QUESTION = "Just to check the microphone, say your first name and how your day is going."
+
+SMALL_TALK_OPENER = "Before we get started, let's talk for a couple of minutes. How's your day going so far?"
+
+SMALL_TALK_INSTRUCTIONS = """
+You are a woman interviewing in North America. This is ordinary small talk before the interview, so the candidate can settle. Both of you can talk freely.
+
+Use everyday topics: how their day is going, the weather, the trip in, coffee, the weekend, or the city. Respond to what they actually said. Do not march through a list.
+One to three spoken sentences. Warm and plain. No job questions, no résumé, and no salary.
+Do not say the interview will be easy. Do not say "no worries".
+If they said almost nothing, offer one different light topic.
+When the note says the time is up, close in one sentence and say you are ready to begin. Set wrap_up to true only then.
+
+Return only a JSON object with the keys "reply" and "wrap_up".
+No markdown fences.
+""".strip()
+
 FALLBACK_QUESTIONS = (
     "Tell me about yourself.",
     "What drew you to this role?",
@@ -213,6 +230,10 @@ def _words(transcript: str) -> list[str]:
 
 def is_thin_transcript(transcript: str) -> bool:
     return len(_words(transcript)) < 5
+
+
+def heard_microphone(transcript: str) -> bool:
+    return bool(re.search(r"[A-Za-z0-9]", transcript or ""))
 
 
 def is_non_answer(transcript: str) -> bool:
