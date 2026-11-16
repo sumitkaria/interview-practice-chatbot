@@ -971,8 +971,8 @@ def render_small_talk(interview: db.InterviewRecord) -> None:
 
 
 def render_role_brief(interview: db.InterviewRecord) -> None:
-    lines = [line.strip() for line in interview.role_brief.splitlines() if line.strip()][:5]
-    body = "".join(f"<p class='brief-line'>{html.escape(line)}</p>" for line in lines)
+    spoken = " ".join(line.strip() for line in interview.role_brief.splitlines() if line.strip())
+    body = f"<p class='brief-line'>{html.escape(spoken)}</p>"
     who = ""
     if interview.interviewer_name:
         who = (
@@ -991,7 +991,7 @@ def render_role_brief(interview: db.InterviewRecord) -> None:
         unsafe_allow_html=True,
     )
     interview_voice(
-        " ".join(lines),
+        spoken,
         f"brief-{interview.id}",
         MAX_ANSWER_SECONDS,
         speak_only=True,

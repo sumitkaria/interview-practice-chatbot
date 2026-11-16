@@ -34,9 +34,12 @@ role:
 The name of this interview, taken from the job description. Use the job title and the organization when it is named, such as "CFO, Capital Markets at ATB". Do not include the word "interview".
 
 role_brief:
-What she says about the role before any question. Exactly 5 short lines, separated by newline characters.
-Natural spoken language. Cover the core of the role: what the person is there to do, and what the job depends on.
-No labels, no bullets, and no question. Do not say the interview will be easy.
+A short spoken introduction of the role, the way she would say it across the table. Four to six sentences in one paragraph.
+No line breaks, no bullets, and no labels such as "reports to" or "team size".
+Cover the core of the job in plain language. Then who the person would report to, about how big the team is, and why the seat is open.
+If the job description does not say those, still give a reasonable picture connected to this kind of role, as how the job sits, not as a checklist.
+Close with one sentence on what she will be listening for, so the candidate knows how to answer.
+Use contractions. Do not say the interview will be easy. Do not ask a question.
 
 introduction:
 Three or four sentences she says before any question. She gives her name and title and welcomes the candidate. She says they have 3 minutes for each answer and can speak or type. She says they will have time at the end to ask her questions. Do not say the interview will be easy, light, or low pressure. No question in the introduction.
@@ -338,25 +341,22 @@ def interview_name(job_description: str) -> str:
 
 def _role_brief(value: str, role_name: str) -> str:
     raw = value.replace("\r\n", "\n").strip()
-    lines = []
+    pieces = []
     for line in raw.splitlines():
         cleaned = re.sub(r"\s+", " ", line).strip(" -•*\t")
         cleaned = re.sub(r"^\d+[\).\:-]\s*", "", cleaned).strip()
         if cleaned and not re.search(r"\beasy\b", cleaned, re.IGNORECASE):
-            lines.append(cleaned[:180])
-    if not lines and raw:
-        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", raw)) if part.strip()]
-        lines = [part[:180] for part in sentences if not re.search(r"\beasy\b", part, re.IGNORECASE)]
-    if not lines:
-        role = role_name or "the role"
-        lines = [
-            f"Before we start, a few words on {role}.",
-            "The core of the job is the work this person is trusted to own.",
-            "The team depends on that part being done with good judgment.",
-            "The rest of the role hangs on that.",
-            "We'll stay close to it as we talk.",
-        ]
-    return "\n".join(lines[:5])
+            pieces.append(cleaned)
+    text = re.sub(r"\s+", " ", " ".join(pieces)).strip()
+    if len(text) < 80:
+        role = role_name or "this role"
+        text = (
+            f"The heart of {role} is the work the rest of the group is counting on someone to own. "
+            "You'd report to me, with a small team around you, closer to a handful of people than a large department. "
+            "The seat is open because that work has grown past what the current group can cover. "
+            "As we talk, I'm listening for how you'd take that on day to day."
+        )
+    return text[:900]
 
 
 def _without_easy(text: str) -> str:
