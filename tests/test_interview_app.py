@@ -93,6 +93,11 @@ def test_password_session_and_separate_profiles():
     assert auth.read_session_token(token, "other-secret", now=1_000) is None
     assert auth.read_session_token(token + "ab", "secret", now=1_000) is None
     assert auth.read_session_token(token, "secret", now=1_000 + auth.SESSION_TTL_SECONDS + 5) is None
+    assert auth.valid_email("sumit@example.com")
+    assert not auth.valid_email("not-an-email")
+    assert not auth.valid_email("!@" + ("!." * 5000))
+    with pytest.raises(auth.AuthError, match="shorter"):
+        auth.register_user("Long", "long@example.com", "p" * 80)
 
 
 def test_google_account_links_existing_email_and_can_be_new():

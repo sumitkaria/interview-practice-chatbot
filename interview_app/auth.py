@@ -6,7 +6,6 @@ import base64
 import hashlib
 import hmac
 import json
-import re
 import time
 
 import bcrypt
@@ -14,8 +13,8 @@ import bcrypt
 from interview_app import db
 
 COOKIE_NAME = "ip_session"
-_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SESSION_TTL_SECONDS = 30 * 24 * 3600
+BCRYPT_MAX_BYTES = 72
 
 
 class AuthError(Exception):
@@ -27,7 +26,14 @@ def normalize_email(email: str) -> str:
 
 
 def valid_email(email: str) -> bool:
-    return bool(_EMAIL.fullmatch(email))
+    if not email or len(email) > 320 or any(character.isspace() for character in email):
+        return False
+    local, separator, domain = email.partition("@")
+    if separator != "@" or "@" in domain or not local or not domain:
+        return False
+    if domain.startswith(".") or domain.endswith(".") or ".." in domain:
+        return False
+    return "." in domain
 
 
 def display_name(name: str, email: str) -> str:
@@ -37,20 +43,19 @@ def display_name(name: str, email: str) -> str:
     return email.split("@", 1)[0][:80]
 
 
-def _password_material(password: str) -> bytes:
-    # bcrypt only uses the first 72 bytes. Hashing first keeps longer passwords intact.
-    return hashlib.sha256(password.encode("utf-8")).hexdigest().encode("ascii")
-
-
 def hash_password(password: str, rounds: int = 12) -> str:
-    return bcrypt.hashpw(_password_material(password), bcrypt.gensalt(rounds=rounds)).decode(
-        "ascii"
-    )
+    encoded = password.encode("utf-8")
+    if len(encoded) > BCRYPT_MAX_BYTES:
+        raise AuthError("Use a shorter password.")
+    return bcrypt.hashpw(encoded, bcrypt.gensalt(rounds=rounds)).decode("ascii")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    encoded = password.encode("utf-8")
+    if len(encoded) > BCRYPT_MAX_BYTES:
+        return False
     try:
-        return bcrypt.checkpw(_password_material(password), password_hash.encode("ascii"))
+        return bcrypt.checkpw(encoded, password_hash.encode("ascii"))
     except ValueError:
         return False
 
@@ -95,7 +100,7 @@ def register_user(name: str, email: str, password: str) -> db.UserRecord:
         raise AuthError("Enter a valid email address.")
     if len(password) < 8:
         raise AuthError("Use at least 8 characters for the password.")
-    if len(password) > 200:
+    if len(password.encode("utf-8")) > BCRYPT_MAX_BYTES:
         raise AuthError("Use a shorter password.")
     try:
         return db.create_password_user(
