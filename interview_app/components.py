@@ -11,7 +11,7 @@ _voice = None
 _session = None
 
 
-def interview_voice(question: str, question_token: str, max_seconds: int = 180):
+def interview_voice(question: str, question_token: str, max_seconds: int = 180, speak_only: bool = False):
     global _voice
     if _voice is None:
         _voice = components.declare_component("interview_voice", path=str(_ROOT / "voice"))
@@ -19,6 +19,7 @@ def interview_voice(question: str, question_token: str, max_seconds: int = 180):
         question=question,
         questionToken=question_token,
         maxSeconds=max_seconds,
+        speakOnly=speak_only,
         key=f"voice-{question_token}",
         default=None,
     )
