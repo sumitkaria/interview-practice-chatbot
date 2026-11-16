@@ -31,6 +31,9 @@ def main() -> None:
     inject_css()
     try:
         db.init_db()
+    except config.DatabaseURLError as exc:
+        st.error(str(exc))
+        st.stop()
     except Exception as exc:
         st.error("The database could not be opened.")
         st.caption(safe_db_message(exc))
@@ -83,6 +86,11 @@ def inject_css() -> None:
 
 def safe_db_message(exc: Exception) -> str:
     text = str(exc)
+    if "label empty" in text or "idna" in text.lower():
+        return (
+            "DATABASE_URL still contains the sample dots, so the database address starts with a period. "
+            "Replace the whole value with the Neon connection string that starts with postgresql://."
+        )
     if "@" in text or "password" in text.lower():
         return "Check DATABASE_URL and whether the database server is reachable."
     return text[:300]
