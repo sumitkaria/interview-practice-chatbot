@@ -149,6 +149,27 @@ def test_interview_keeps_a_snapshot_and_isolates_users():
     assert db.list_turns(first.id) == []
 
 
+def test_interview_history_keeps_older_interviews():
+    user = auth.register_user("Case", "history@example.com", "long-password")
+    first = db.create_interview(
+        user.id,
+        "CFO, Capital Markets\nATB Financial",
+        "Resume A",
+        ["Tell me about yourself."],
+        role_name="CFO, Capital Markets at ATB Financial",
+    )
+    db.set_interview_status(first.id, "completed")
+    second = db.create_interview(user.id, "Job B", "Resume B", ["Tell me about yourself."])
+    rows = db.list_interviews(user.id)
+    assert [row.id for row in rows] == [second.id, first.id]
+    assert db.get_interview(first.id).status == "completed"
+    assert ui.uploaded_name("ATB job description.docx", "Role text", "Pasted job description") == "ATB job description.docx"
+    assert ui.uploaded_name("Pasted text", "Role text", "Pasted job description") == "Pasted job description"
+    assert ui.uploaded_name("", "", "Pasted job description") == "Nothing uploaded yet"
+    assert ui.interview_history_label(first).startswith("CFO, Capital Markets at ATB Financial · ")
+    assert "in progress" in ui.interview_history_label(second)
+
+
 def test_interview_name_comes_from_the_job_description():
     posted = prompts.interview_name(
         "CFO, Capital Markets\nATB Financial\n\nThe CFO leads the capital markets business."
