@@ -66,7 +66,7 @@ def extract_named_bytes(name: str, data: bytes, image_reader) -> str:
         raise ValueError(f"{name} is larger than 10 MB.")
     extension = _extension(name)
     if extension == ".doc":
-        raise ValueError(f"{name} is an older Word file. Save it as .docx and upload it again.")
+        raise ValueError(f"{name} could not be read. Paste the text instead.")
     if extension == ".pdf":
         text = _read_pdf(data)
     elif extension == ".docx":
@@ -84,14 +84,11 @@ def extract_named_bytes(name: str, data: bytes, image_reader) -> str:
             )
         text = image_reader(data, _image_mime(extension))
     else:
-        raise ValueError(
-            f"{name} is not a supported file. Use PDF, DOCX, TXT, MD, RTF, HTML, CSV, PNG, or JPG."
-        )
+        raise ValueError(f"{name} could not be read. Paste the text instead.")
     cleaned = tidy(text)
     if not cleaned:
         raise ValueError(
-            f"No text could be read from {name}. "
-            "If it is a scanned document, upload a PNG or JPG, or paste the text."
+            f"No text could be read from {name}. Paste the text instead."
         )
     return cleaned
 
@@ -124,7 +121,7 @@ def _read_pdf(data: bytes) -> str:
         reader = PdfReader(io.BytesIO(data))
         pages = [(page.extract_text() or "") for page in reader.pages]
     except Exception as exc:
-        raise ValueError("That PDF could not be read. Try another export or paste the text.") from exc
+        raise ValueError("That file could not be read. Paste the text instead.") from exc
     return "\n\n".join(pages)
 
 
@@ -134,7 +131,7 @@ def _read_docx(data: bytes) -> str:
     try:
         document = Document(io.BytesIO(data))
     except Exception as exc:
-        raise ValueError("That Word file could not be read. Save it again as .docx or paste the text.") from exc
+        raise ValueError("That file could not be read. Paste the text instead.") from exc
     lines = [paragraph.text for paragraph in document.paragraphs]
     for table in document.tables:
         for row in table.rows:
@@ -149,7 +146,7 @@ def _read_rtf(data: bytes) -> str:
     try:
         return rtf_to_text(decode_text(data))
     except Exception as exc:
-        raise ValueError("That RTF file could not be read. Paste the text instead.") from exc
+        raise ValueError("That file could not be read. Paste the text instead.") from exc
 
 
 def _read_html(data: bytes) -> str:

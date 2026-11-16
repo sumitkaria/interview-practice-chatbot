@@ -150,6 +150,17 @@ def inject_css() -> None:
             border-radius: 16px;
             padding: 0.35rem 0.6rem 0.2rem;
         }
+        [data-testid="stFileUploaderDropzoneInstructions"] {
+            font-size: 0 !important;
+            line-height: 0;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"]::after {
+            content: "10MB max file size";
+            font-size: 0.92rem;
+            line-height: 1.4;
+            color: #3C3832;
+            font-weight: 500;
+        }
         [data-testid="stSidebar"] {
             background: #E5EEE9;
             border-right: 1px solid #D3DDD7;
@@ -538,10 +549,9 @@ def render_material_editor(
     st.subheader(title)
     uploads = st.file_uploader(
         upload_label,
-        type=files.UPLOAD_TYPES,
         accept_multiple_files=True,
         key=upload_key,
-        help="Add more than one file if you need to. The text appears below.",
+        help="10MB max file size",
     )
     apply_upload(uploads, sig_key, draft_key, source_key, reader)
     error = st.session_state.get(sig_key + "_error")
