@@ -12,10 +12,16 @@ from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
 _VIEW_PREFIXES = ("pending_answer_", "attempt_", "typed_")
+_DRAFT_FIELDS = (
+    ("job_draft", "job_text", "job_description", "job_source"),
+    ("resume_draft", "resume_text", "resume_text", "resume_source"),
+)
 _VIEW_KEYS = {
     "draft_marker",
     "job_draft",
     "resume_draft",
+    "job_text",
+    "resume_text",
     "job_source",
     "resume_source",
     "job_upload_sig",
@@ -253,6 +259,7 @@ def render_app(user: db.UserRecord) -> None:
     ready = profile_ready(profile)
     if not ready:
         st.caption("Add the job and your background. They are saved to your account.")
+        restore_draft_widgets(st.session_state)
         render_materials(user, profile)
         return
     if "section" not in st.session_state:
@@ -265,8 +272,10 @@ def render_app(user: db.UserRecord) -> None:
         key="section",
     )
     if section == "Materials":
+        restore_draft_widgets(st.session_state)
         render_materials(user, profile)
     else:
+        profile = persist_complete_drafts(user.id, profile)
         render_practice(user, profile)
 
 
@@ -274,15 +283,47 @@ def profile_ready(profile: db.ProfileRecord | None) -> bool:
     return bool(profile and profile.job_description.strip() and profile.resume_text.strip())
 
 
-def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
+def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None, state=None) -> None:
+    """Keep material text available after the Materials form is closed.
+
+    The text boxes use widget keys. Streamlit removes those keys when Practice
+    is showing, so a second copy is kept under a key that is not a widget.
+    """
+    state = st.session_state if state is None else state
+    remember_drafts(state)
     marker = user.id + ":" + (profile.updated_at.isoformat() if profile else "new")
-    if st.session_state.get("draft_marker") == marker:
+    if state.get("draft_marker") != marker:
+        state["draft_marker"] = marker
+        for widget_key, durable_key, attr, source_key in _DRAFT_FIELDS:
+            value = getattr(profile, attr) if profile else ""
+            state[widget_key] = value
+            state[durable_key] = value
+            state[source_key] = getattr(profile, source_key) if profile else ""
         return
-    st.session_state.draft_marker = marker
-    st.session_state.job_draft = profile.job_description if profile else ""
-    st.session_state.resume_draft = profile.resume_text if profile else ""
-    st.session_state.job_source = profile.job_source if profile else ""
-    st.session_state.resume_source = profile.resume_source if profile else ""
+    for widget_key, durable_key, attr, _source_key in _DRAFT_FIELDS:
+        if durable_key not in state:
+            state[durable_key] = getattr(profile, attr) if profile else ""
+
+
+def remember_drafts(state) -> None:
+    for widget_key, durable_key, _attr, _source_key in _DRAFT_FIELDS:
+        if widget_key in state:
+            state[durable_key] = state.get(widget_key) or ""
+
+
+def restore_draft_widgets(state) -> None:
+    for widget_key, durable_key, _attr, _source_key in _DRAFT_FIELDS:
+        if widget_key not in state and durable_key in state:
+            state[widget_key] = state[durable_key]
+
+
+def current_draft(state, widget_key: str) -> str:
+    for key, durable_key, _attr, _source_key in _DRAFT_FIELDS:
+        if key == widget_key:
+            if widget_key in state:
+                return state.get(widget_key) or ""
+            return state.get(durable_key) or ""
+    return ""
 
 
 def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> None:
@@ -386,8 +427,8 @@ def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader)
 
 
 def save_materials(user_id: str) -> None:
-    job = files.truncate(st.session_state.get("job_draft", ""))
-    resume = files.truncate(st.session_state.get("resume_draft", ""))
+    job = files.truncate(current_draft(st.session_state, "job_draft"))
+    resume = files.truncate(current_draft(st.session_state, "resume_draft"))
     if not job or not resume:
         st.error("Add both a job description and your background before saving.")
         return
@@ -407,11 +448,33 @@ def save_materials(user_id: str) -> None:
     st.rerun()
 
 
-def drafts_differ(profile: db.ProfileRecord) -> bool:
-    return (
-        (st.session_state.get("job_draft") or "") != profile.job_description
-        or (st.session_state.get("resume_draft") or "") != profile.resume_text
+def drafts_differ(profile: db.ProfileRecord, state=None) -> bool:
+    state = st.session_state if state is None else state
+    return current_draft(state, "job_draft") != profile.job_description or current_draft(
+        state, "resume_draft"
+    ) != profile.resume_text
+
+
+def persist_complete_drafts(user_id: str, profile: db.ProfileRecord, state=None) -> db.ProfileRecord:
+    """Store both materials when Practice opens, including text that was not explicitly saved."""
+    state = st.session_state if state is None else state
+    job = files.truncate(current_draft(state, "job_draft"))
+    resume = files.truncate(current_draft(state, "resume_draft"))
+    if not job or not resume:
+        return profile
+    if job == profile.job_description and resume == profile.resume_text:
+        return profile
+    saved = db.save_profile(
+        user_id,
+        job,
+        state.get("job_source") or "Pasted text",
+        resume,
+        state.get("resume_source") or "Pasted text",
     )
+    state["draft_marker"] = user_id + ":" + saved.updated_at.isoformat()
+    state["job_text"] = job
+    state["resume_text"] = resume
+    return saved
 
 
 def render_practice(user: db.UserRecord, profile: db.ProfileRecord) -> None:

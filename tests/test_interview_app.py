@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from interview_app import auth, config, db, files, grok_client, prompts
+from interview_app import auth, config, db, files, grok_client, prompts, ui
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -214,6 +214,36 @@ def test_prepare_database_url_keeps_a_real_neon_string():
     prepared = config.prepare_database_url(f'"{raw}"')
     assert prepared.startswith("postgresql+psycopg://neondb_owner:secret@ep-cool.us-east-2.aws.neon.tech/neondb")
     assert "channel_binding=require" in prepared
+
+
+def test_materials_survive_leaving_the_form_and_practice_saves_them():
+    user = auth.register_user("Sumit", "materials@example.com", "correct horse")
+    saved = db.save_profile(user.id, "Original job", "job.txt", "Original resume", "resume.txt")
+    state = {
+        "draft_marker": user.id + ":" + saved.updated_at.isoformat(),
+        "job_draft": "Original job",
+        "resume_draft": "Original resume",
+        "job_source": "job.txt",
+        "resume_source": "resume.txt",
+    }
+    ui.remember_drafts(state)
+    del state["job_draft"]
+    del state["resume_draft"]
+
+    ui.ensure_drafts(user, db.get_profile(user.id), state)
+    ui.restore_draft_widgets(state)
+    assert state["job_draft"] == "Original job"
+    assert state["resume_draft"] == "Original resume"
+
+    state["job_draft"] = "Updated job description"
+    state["resume_draft"] = "Updated resume"
+    ui.remember_drafts(state)
+    del state["job_draft"]
+    del state["resume_draft"]
+    updated = ui.persist_complete_drafts(user.id, db.get_profile(user.id), state)
+    assert updated.job_description == "Updated job description"
+    assert updated.resume_text == "Updated resume"
+    assert not ui.drafts_differ(updated, state)
 
 
 def test_prepare_database_url_fixes_a_leading_dot_when_credentials_exist():
