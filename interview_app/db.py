@@ -117,6 +117,10 @@ class InterviewRecord:
     introduction: str = ""
     bridges: dict[int, str] | None = None
     role_name: str = ""
+    job_source: str = ""
+    resume_source: str = ""
+    role_brief: str = ""
+    brief_done: bool = True
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,10 @@ def _interview(row: Interview) -> InterviewRecord:
         introduction=str(payload.get("introduction") or ""),
         bridges=bridges,
         role_name=str(payload.get("role_name") or ""),
+        job_source=str(payload.get("job_source") or ""),
+        resume_source=str(payload.get("resume_source") or ""),
+        role_brief=str(payload.get("role_brief") or ""),
+        brief_done=bool(payload.get("brief_done", not payload.get("role_brief"))),
     )
 
 
@@ -361,6 +369,9 @@ def create_interview(
     interviewer_title: str = "",
     introduction: str = "",
     role_name: str = "",
+    job_source: str = "",
+    resume_source: str = "",
+    role_brief: str = "",
 ) -> InterviewRecord:
     now = utcnow()
     with session_scope() as session:
@@ -383,6 +394,10 @@ def create_interview(
                     "interviewer_title": interviewer_title,
                     "introduction": introduction,
                     "role_name": role_name,
+                    "job_source": job_source,
+                    "resume_source": resume_source,
+                    "role_brief": role_brief,
+                    "brief_done": False,
                     "questions": list(questions),
                     "bridges": {},
                 }
@@ -401,7 +416,7 @@ def get_interview(interview_id: str) -> InterviewRecord | None:
         return _interview(row) if row else None
 
 
-def list_interviews(user_id: str, limit: int = 30) -> list[InterviewRecord]:
+def list_interviews(user_id: str, limit: int = 100) -> list[InterviewRecord]:
     with session_scope() as session:
         rows = session.scalars(
             select(Interview)
@@ -430,6 +445,16 @@ def set_current_index(interview_id: str, index: int) -> None:
         row = session.get(Interview, interview_id)
         if row is not None:
             row.current_index = max(0, index)
+
+
+def mark_brief_done(interview_id: str) -> None:
+    with session_scope() as session:
+        row = session.get(Interview, interview_id)
+        if row is None:
+            return
+        payload = _script_payload(row.questions_json)
+        payload["brief_done"] = True
+        row.questions_json = json.dumps(payload)
 
 
 def set_bridge(interview_id: str, question_index: int, bridge: str) -> None:

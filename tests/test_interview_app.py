@@ -204,13 +204,21 @@ def test_normalize_questions_and_coach_prompt():
     assert script.interviewer_name == "Amelia Ward"
     assert script.questions[0] == "Tell me about yourself."
     assert script.questions[1] == "Why this role?"
-    assert len(script.questions) == 2
+    assert len(script.questions) == 25
+    assert "3 minutes" in script.introduction
+    assert "ask me" in script.introduction.lower()
+    assert "easy" not in script.introduction.lower()
+    assert len([line for line in script.role_brief.splitlines() if line.strip()]) == 5
+    assert prompts.is_non_answer("")
+    assert prompts.is_non_answer("Interesting.")
+    assert prompts.is_non_answer("No worries")
+    assert not prompts.is_non_answer("I led the migration for five years")
 
     fenced = prompts.parse_model_json('```json\n{"answer": "I did", "guidance": "Add a result"}\n```')
-    answer, guidance, bridge = prompts.coach_from_payload(fenced, "")
+    answer, guidance, bridge = prompts.coach_from_payload(fenced, "", "Interesting")
     assert answer == "I did"
     assert "result" in guidance
-    assert bridge
+    assert bridge == ""
 
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
@@ -245,7 +253,7 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     )
     assert answer == "I built the hiring workflow."
     assert guidance == "Lead with the result."
-    assert bridge
+    assert bridge == ""
 
 
 def test_missing_grok_key(monkeypatch):

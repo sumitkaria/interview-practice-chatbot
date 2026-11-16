@@ -153,19 +153,15 @@ def inject_css() -> None:
         [data-testid="stFileUploader"] {
             background: var(--card);
             border: 1px dashed #C4BBA9;
-            border-radius: 16px;
-            padding: 0.35rem 0.6rem 0.2rem;
+            border-radius: 12px;
+            padding: 0;
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            padding: 0.2rem 0.55rem !important;
+            min-height: 0 !important;
         }
         [data-testid="stFileUploaderDropzoneInstructions"] {
-            font-size: 0 !important;
-            line-height: 0;
-        }
-        [data-testid="stFileUploaderDropzoneInstructions"]::after {
-            content: "10MB max file size";
-            font-size: 0.92rem;
-            line-height: 1.4;
-            color: #3C3832;
-            font-weight: 500;
+            display: none !important;
         }
         [data-testid="stSidebar"],
         [data-testid="stExpandSidebarButton"],
@@ -253,7 +249,8 @@ def inject_css() -> None:
         .studio .who { margin-bottom: 0.75rem; }
         .studio .name { font-size: 1.2rem; font-weight: 700; line-height: 1.2; color: var(--ink); }
         .studio .role { color: var(--forest); font-weight: 600; font-size: 0.95rem; margin-top: 0.12rem; }
-        .studio .aside { color: #2E3330; font-size: 1.02rem; line-height: 1.5; margin: 0 0 0.8rem; }
+        .studio .aside { color: #2E3330; font-size: 1.02rem; line-height: 1.5; margin: 0.4rem 0 0.2rem; }
+        .studio .brief-line { font-size: 1.08rem; line-height: 1.45; margin: 0 0 0.55rem; color: var(--ink); }
         .studio .ask { font-size: 1.65rem; font-weight: 650; line-height: 1.3; letter-spacing: -0.03em; margin: 0 0 0.85rem; color: var(--ink); }
         .studio .count { color: var(--brass); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
         </style>
@@ -587,10 +584,6 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
     )
-    if st.button("Save", type="primary", use_container_width=True, key="save_materials"):
-        save_materials(user.id)
-    if profile and drafts_differ(profile):
-        st.caption("Not saved yet.")
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()
@@ -617,12 +610,19 @@ def render_sidebar_editor(
         key=upload_key,
         help="10MB max file size",
     )
-    apply_upload(uploads, sig_key, draft_key, source_key, image_reader_for(user.id))
+    apply_upload(uploads, sig_key, draft_key, source_key, image_reader_for(user.id), user.id)
     error = st.session_state.get(sig_key + "_error")
     if error:
         st.error(error)
     with st.expander("Edit the text"):
-        st.text_area(paste_label, key=draft_key, height=140, label_visibility="collapsed")
+        st.text_area(
+            paste_label,
+            key=draft_key,
+            height=140,
+            label_visibility="collapsed",
+            on_change=autosave_materials,
+            args=(user.id,),
+        )
 
 
 def render_interview_history(user_id: str) -> None:
@@ -652,7 +652,7 @@ def image_reader_for(user_id: str):
     return read
 
 
-def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader) -> None:
+def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader, user_id: str) -> None:
     items = list(uploads or [])
     signature = tuple((item.name, item.size) for item in items)
     if not signature or signature == st.session_state.get(sig_key):
@@ -667,29 +667,41 @@ def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader)
     st.session_state[sig_key + "_error"] = ""
     st.session_state[draft_key] = text
     st.session_state[source_key] = source
+    autosave_materials(user_id, clear_uploads=True)
     st.rerun()
 
 
-def save_materials(user_id: str) -> None:
-    job = files.truncate(current_draft(st.session_state, "job_draft"))
-    resume = files.truncate(current_draft(st.session_state, "resume_draft"))
-    if not job or not resume:
-        st.error("Add the job description and your résumé before saving.")
-        return
-    db.save_profile(
-        user_id,
-        job,
-        st.session_state.get("job_source") or "Pasted text",
-        resume,
-        st.session_state.get("resume_source") or "Pasted text",
+def autosave_materials(user_id: str, *, clear_uploads: bool = False) -> None:
+    state = st.session_state
+    job = files.truncate(current_draft(state, "job_draft"))
+    resume = files.truncate(current_draft(state, "resume_draft"))
+    profile = db.get_profile(user_id)
+    job_source = state.get("job_source") or (profile.job_source if profile else "")
+    resume_source = state.get("resume_source") or (profile.resume_source if profile else "")
+    if not job_source and job:
+        job_source = "Pasted text"
+    if not resume_source and resume:
+        resume_source = "Pasted text"
+    unchanged = (
+        profile is not None
+        and job == profile.job_description
+        and resume == profile.resume_text
+        and job_source == profile.job_source
+        and resume_source == profile.resume_source
     )
-    st.session_state.upload_nonce = int(st.session_state.get("upload_nonce", 0)) + 1
-    st.session_state.job_upload_sig = ()
-    st.session_state.resume_upload_sig = ()
-    st.session_state.job_upload_sig_error = ""
-    st.session_state.resume_upload_sig_error = ""
-    st.session_state.just_saved = True
-    st.rerun()
+    if not unchanged:
+        saved = db.save_profile(user_id, job, job_source, resume, resume_source)
+        state["draft_marker"] = user_id + ":" + saved.updated_at.isoformat()
+        state["job_text"] = job
+        state["resume_text"] = resume
+        state["job_source"] = job_source
+        state["resume_source"] = resume_source
+    if clear_uploads:
+        state["upload_nonce"] = int(state.get("upload_nonce", 0)) + 1
+        state["job_upload_sig"] = ()
+        state["resume_upload_sig"] = ()
+        state["job_upload_sig_error"] = ""
+        state["resume_upload_sig_error"] = ""
 
 
 def drafts_differ(profile: db.ProfileRecord, state=None) -> bool:
@@ -726,11 +738,10 @@ def render_practice(
     profile: db.ProfileRecord,
     interview: db.InterviewRecord | None,
 ) -> None:
-    if drafts_differ(profile):
-        st.info("The left side still has an unsaved edit. This interview uses the last saved copy.")
     if interview is None:
         render_start(user, profile)
         return
+    render_session_files(interview)
     if interview.status == "active" and st.session_state.get("interview_saved_id") != interview.id:
         render_active(interview)
         return
@@ -743,11 +754,26 @@ def render_practice(
     render_start(user, profile)
 
 
+def render_session_files(interview: db.InterviewRecord) -> None:
+    job = uploaded_name(interview.job_source, interview.job_description, "Pasted job description")
+    resume = uploaded_name(interview.resume_source, interview.resume_text, "Pasted résumé")
+    st.markdown(
+        "<div class='session-files'>"
+        "<div class='file-label'>Files for this session</div>"
+        f"<div class='file'>{html.escape(job)}</div>"
+        f"<div class='file'>{html.escape(resume)}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     st.subheader("A conversation, not a quiz")
+    st.write("You have 3 minutes for each answer. You can speak, or type.")
+    st.write("She starts with a short picture of the role, then the questions.")
     st.write(
-        "She introduces herself, starts with the usual easy questions, "
-        "then asks about what this role actually depends on. You answer out loud."
+        "She introduces herself, then asks about the work, including situations, "
+        "remote or hybrid work, and pay. At the end you can ask her questions."
     )
     if not config.xai_api_key():
         st.error(str(grok_client.GrokNotConfigured()))
@@ -769,6 +795,9 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 interviewer_title=script.interviewer_title,
                 introduction=script.introduction,
                 role_name=script.role_name or prompts.interview_name(profile.job_description),
+                job_source=profile.job_source,
+                resume_source=profile.resume_source,
+                role_brief=script.role_brief,
             )
             st.session_state.selected_interview_id = created.id
         except grok_client.GrokError as exc:
@@ -783,14 +812,20 @@ def render_summary(turns: list[db.TurnRecord]) -> None:
         st.markdown(f"**{turn.question_text}**")
         st.caption("What you said")
         st.write(turn.transcript or "Nothing was captured.")
-        st.caption("How an interviewer hopes to hear it")
-        st.write(turn.model_answer)
-        st.caption("Keep this, then sharpen one thing")
-        st.write(turn.guidance)
+        if turn.model_answer:
+            label = "Her answer" if turn.guidance == "candidate-question" else "How an interviewer hopes to hear it"
+            st.caption(label)
+            st.write(turn.model_answer)
+        if turn.guidance and turn.guidance != "candidate-question":
+            st.caption("Keep this, then sharpen one thing")
+            st.write(turn.guidance)
         st.divider()
 
 
 def render_active(interview: db.InterviewRecord) -> None:
+    if interview.role_brief and not interview.brief_done:
+        render_role_brief(interview)
+        return
     questions = interview.questions
     if not questions:
         st.error("This interview has no questions. Start a new one.")
@@ -798,8 +833,8 @@ def render_active(interview: db.InterviewRecord) -> None:
             finish_interview(interview.id)
         return
     if interview.current_index >= len(questions):
-        db.set_interview_status(interview.id, "completed")
-        st.rerun()
+        render_candidate_questions(interview)
+        return
 
     index = interview.current_index
     question = questions[index]
@@ -815,13 +850,45 @@ def render_active(interview: db.InterviewRecord) -> None:
         with st.expander("Earlier questions"):
             for turn in earlier:
                 st.markdown(f"**{turn.question_text}**")
-                st.write(turn.model_answer)
+                if turn.model_answer:
+                    st.write(turn.model_answer)
 
     turn = db.get_turn(interview.id, index)
     if turn is None:
         capture_answer(interview, index, question)
         return
     show_feedback(interview, turn, index, len(questions))
+
+
+def render_role_brief(interview: db.InterviewRecord) -> None:
+    lines = [line.strip() for line in interview.role_brief.splitlines() if line.strip()][:5]
+    body = "".join(f"<p class='brief-line'>{html.escape(line)}</p>" for line in lines)
+    who = ""
+    if interview.interviewer_name:
+        who = (
+            "<div class='who'>"
+            f"<div class='name'>{html.escape(interview.interviewer_name)}</div>"
+            f"<div class='role'>{html.escape(interview.interviewer_title)}</div>"
+            "</div>"
+        )
+    st.markdown(
+        "<div class='studio'>"
+        f"{who}"
+        f"{body}"
+        "<p class='aside'>You have 3 minutes for each answer. You can speak, or type. "
+        "You'll have time at the end to ask questions.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    interview_voice(
+        " ".join(lines),
+        f"brief-{interview.id}",
+        MAX_ANSWER_SECONDS,
+        speak_only=True,
+    )
+    if st.button("Begin questions", type="primary", key=f"begin_questions_{interview.id}"):
+        db.mark_brief_done(interview.id)
+        st.rerun()
 
 
 def spoken_line(interview: db.InterviewRecord, index: int, question: str) -> str:
@@ -863,6 +930,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
     attempt = int(st.session_state.get(f"attempt_{interview.id}_{index}", 0))
     pending = st.session_state.get(pending_key)
     if pending is None:
+        st.caption("3 minutes. Speak, or type below.")
         token = f"{interview.id}-{index}-{attempt}"
         result = interview_voice(spoken_line(interview, index, question), token, MAX_ANSWER_SECONDS)
         if result and result.get("status") == "done":
@@ -871,7 +939,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                 "reason": result.get("reason") or "manual",
             }
             st.rerun()
-        with st.expander("Microphone unavailable? Type your answer"):
+        with st.expander("Type your answer"):
             typed = st.text_area(
                 "Typed answer",
                 key=f"typed_{token}",
@@ -885,6 +953,10 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                     "reason": "typed",
                 }
                 st.rerun()
+        return
+
+    if prompts.is_non_answer(pending["transcript"]) and index < len(interview.questions):
+        move_past_silence(interview, index, question, pending)
         return
 
     st.markdown("**What you said**")
@@ -913,7 +985,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
             guidance,
             pending.get("reason") or "",
         )
-        if index + 1 < len(interview.questions):
+        if bridge and index + 1 < len(interview.questions):
             db.set_bridge(interview.id, index + 1, bridge)
     except grok_client.GrokError as exc:
         st.error(str(exc))
@@ -949,9 +1021,114 @@ def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int
             if st.button("Next question", type="primary"):
                 db.set_current_index(interview.id, index + 1)
                 st.rerun()
-        elif st.button("Finish interview", type="primary"):
-            db.set_interview_status(interview.id, "completed")
+        elif st.button("Your questions", type="primary"):
+            db.set_current_index(interview.id, total)
             st.rerun()
+
+
+def move_past_silence(interview: db.InterviewRecord, index: int, question: str, pending: dict) -> None:
+    db.save_turn(
+        interview.id,
+        index,
+        question,
+        (pending.get("transcript") or "").strip(),
+        "",
+        "",
+        pending.get("reason") or "",
+    )
+    st.session_state.pop(f"pending_answer_{interview.id}_{index}", None)
+    db.set_current_index(interview.id, index + 1)
+    st.rerun()
+
+
+def render_candidate_questions(interview: db.InterviewRecord) -> None:
+    index = max(interview.current_index, len(interview.questions))
+    if interview.current_index != index:
+        db.set_current_index(interview.id, index)
+    prompt = prompts.CANDIDATE_OPENING if index == len(interview.questions) else "What else would you like to ask me?"
+    st.markdown(
+        "<div class='studio'>"
+        f"<p class='ask'>{html.escape(prompt)}</p>"
+        "<div class='count'>Your questions</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    turn = db.get_turn(interview.id, index)
+    if turn is None:
+        capture_candidate_question(interview, index, prompt)
+        return
+    st.markdown("**What you asked**")
+    st.write(turn.transcript or "Nothing was captured.")
+    st.markdown(f"**{html.escape(interview.interviewer_name or 'She')}**")
+    st.write(turn.model_answer)
+    left, right = st.columns(2)
+    with left:
+        if st.button("Ask another", key=f"ask_another_{interview.id}_{index}"):
+            db.set_current_index(interview.id, index + 1)
+            st.rerun()
+    with right:
+        if st.button("End this interview", key=f"end_questions_{interview.id}", type="primary"):
+            finish_interview(interview.id)
+
+
+def capture_candidate_question(interview: db.InterviewRecord, index: int, prompt: str) -> None:
+    pending_key = f"pending_answer_{interview.id}_{index}"
+    attempt = int(st.session_state.get(f"attempt_{interview.id}_{index}", 0))
+    pending = st.session_state.get(pending_key)
+    if pending is None:
+        st.caption("3 minutes. Speak, or type below.")
+        token = f"{interview.id}-{index}-{attempt}"
+        result = interview_voice(prompt, token, MAX_ANSWER_SECONDS)
+        if result and result.get("status") == "done":
+            st.session_state[pending_key] = {
+                "transcript": (result.get("transcript") or "").strip(),
+                "reason": result.get("reason") or "manual",
+            }
+            st.rerun()
+        with st.expander("Type your question"):
+            typed = st.text_area(
+                "Typed question",
+                key=f"typed_{token}",
+                height=120,
+                label_visibility="collapsed",
+                placeholder="Type the question you would ask",
+            )
+            if st.button("Submit typed question", key=f"typed_btn_{token}"):
+                st.session_state[pending_key] = {
+                    "transcript": (typed or "").strip(),
+                    "reason": "typed",
+                }
+                st.rerun()
+        return
+    if prompts.is_non_answer(pending["transcript"]):
+        discard_attempt(interview.id, index, attempt)
+        return
+    try:
+        with st.spinner("She is answering…"):
+            reply = grok_client.answer_candidate_question(
+                job_description=interview.job_description,
+                resume_text=interview.resume_text,
+                question=pending["transcript"],
+                interviewer_name=interview.interviewer_name,
+                interviewer_title=interview.interviewer_title,
+                cache_key=interview.id,
+            )
+        db.save_turn(
+            interview.id,
+            index,
+            prompt,
+            pending["transcript"],
+            reply,
+            "candidate-question",
+            pending.get("reason") or "",
+        )
+    except grok_client.GrokError as exc:
+        st.error(str(exc))
+        if st.button("Try again", key=f"retry_ask_{interview.id}_{index}"):
+            st.rerun()
+        return
+    st.session_state.pop(pending_key, None)
+    st.rerun()
 
 
 def finish_interview(interview_id: str) -> None:

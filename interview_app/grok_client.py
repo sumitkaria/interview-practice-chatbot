@@ -111,7 +111,7 @@ def generate_questions(job_description: str, resume_text: str, *, cache_key: str
         prompts.QUESTION_INSTRUCTIONS,
         prompts.questions_input(job_description, resume_text, interviewer_name),
         cache_key=cache_key,
-        max_output_tokens=4000,
+        max_output_tokens=8000,
         client=client,
     )
     try:
@@ -139,12 +139,49 @@ def coach_answer(
     )
     try:
         payload = prompts.parse_model_json(raw)
-        return prompts.coach_from_payload(payload, raw)
+        return prompts.coach_from_payload(payload, raw, transcript)
     except (ValueError, TypeError, json.JSONDecodeError):
         cleaned = raw.strip()
         if not cleaned:
             raise GrokError("Grok returned an empty answer. Try again.")
-        return cleaned, "That already has a clear point. Next time, add the result in one sentence.", "Thanks. Let's keep going."
+        return cleaned, "That already has a clear point. Next time, add the result in one sentence.", ""
+
+
+def answer_candidate_question(
+    *,
+    job_description: str,
+    resume_text: str,
+    question: str,
+    interviewer_name: str,
+    interviewer_title: str,
+    cache_key: str,
+    client=None,
+) -> str:
+    raw = complete(
+        prompts.INTERVIEWER_REPLY_INSTRUCTIONS,
+        (
+            f"INTERVIEWER:\n{interviewer_name}, {interviewer_title}\n\n"
+            f"JOB DESCRIPTION:\n{job_description.strip()}\n\n"
+            f"CANDIDATE BACKGROUND:\n{resume_text.strip()}\n\n"
+            f"CANDIDATE'S QUESTION:\n{question.strip()}\n"
+        ),
+        cache_key=cache_key,
+        max_output_tokens=2000,
+        client=client,
+    )
+    try:
+        payload = prompts.parse_model_json(raw)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        reply = raw.strip()
+        if not reply:
+            raise GrokError("Grok returned an empty answer. Try again.")
+        return reply
+    reply = ""
+    if isinstance(payload, dict):
+        reply = str(payload.get("reply") or payload.get("answer") or "").strip()
+    if not reply:
+        raise GrokError("Grok returned an empty answer. Try again.")
+    return reply
 
 
 def extract_document_text(data: bytes, mime: str, *, cache_key: str, client=None) -> str:

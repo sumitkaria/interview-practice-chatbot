@@ -91,6 +91,7 @@
   var finalText = "";
   var interim = "";
   var listening = false;
+  var speakOnly = false;
   var closed = false;
   var sent = false;
   var allowRestart = false;
@@ -152,7 +153,12 @@
   }
 
   function syncButtons() {
-    startBtn.hidden = listening || closed;
+    startBtn.hidden = speakOnly || listening || closed;
+    doneBtn.hidden = speakOnly;
+    typeBtn.hidden = speakOnly;
+    timerEl.hidden = speakOnly;
+    document.getElementById("transcript").hidden = speakOnly;
+    if (speakOnly) typeWrap.hidden = true;
   }
 
   function foldInterim() {
@@ -395,6 +401,13 @@
     timerEl.textContent = format(maxMs);
     renderTranscript();
     syncButtons();
+    if (speakOnly) {
+      speak(currentQuestion, function () {
+        if (closed) return;
+        statusEl.textContent = "Continue when you're ready.";
+      });
+      return;
+    }
     speak(currentQuestion, startListening);
   }
 
@@ -429,6 +442,7 @@
     applyTheme(data.theme);
     var args = data.args || {};
     currentQuestion = String(args.question || "");
+    speakOnly = !!args.speakOnly;
     maxMs = Math.max(10, Number(args.maxSeconds) || 180) * 1000;
     var token = String(args.questionToken || "");
     if (token && token === activeToken) {
