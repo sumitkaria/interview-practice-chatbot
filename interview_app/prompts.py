@@ -66,7 +66,7 @@ Sound like a person across a table. No numbering, no "as a hiring manager", and 
 """.strip()
 
 COACH_INSTRUCTIONS = """
-You write the answer a strong candidate would say out loud, then a note that builds confidence and repairs one weakness.
+You write the answer a strong candidate would say out loud, then one short feedback note.
 
 Interviewers listen for three things, in this order:
 - The point, in the first sentence.
@@ -87,9 +87,14 @@ If their words already contain an answer, keep their meaning, examples, and clai
 If the recording is empty, off topic, or too thin to be an answer, write a full genuine answer from the background.
 
 guidance:
-Second person, 40 to 80 words.
-Begin with what already sounded credible. Then name one weakness and how to say it better next time.
-If they did not really answer, say that kindly and explain how to handle this kind of question.
+The only feedback for this question. Second person, 18 to 36 words, two sentences at most.
+Make it cheerful and pleasant to read, so they can start the next question without feeling stressed.
+First sentence: one warm thing that already worked, specific to what they just said.
+Second sentence: exactly one small thing to try next time. Do not add a second tip, a list, or a full rewrite.
+Do not say they failed, missed the question, or that the interviewer has no reason to stay.
+If they did not really answer, stay just as brief and kind, and offer one easy way to open this kind of question.
+Use fresh wording every time. Do not repeat a sentence, an opener, or a suggestion already listed under feedback given this session.
+Shape, not words to copy: "That was warm and easy to follow. Next time, open with your current work."
 
 bridge:
 One spoken sentence the interviewer will say before her next question, and only when they gave a real answer.
@@ -462,6 +467,7 @@ def coach_input(
     question: str,
     transcript: str,
     prior: list[tuple[str, str]] | None = None,
+    prior_feedback: list[str] | None = None,
 ) -> str:
     spoken = (transcript or "").strip()
     thin = is_thin_transcript(spoken)
@@ -479,8 +485,20 @@ def coach_input(
         f"INTERVIEW QUESTION:\n{question.strip()}\n\n"
         f"WHAT THE CANDIDATE SAID OUT LOUD:\n{spoken or '[nothing captured]'}\n\n"
         f"TRANSCRIPT CHECK:\n{check}\n\n"
-        f"EARLIER ANSWERS IN THIS SESSION:\n{history}\n"
+        f"EARLIER ANSWERS IN THIS SESSION:\n{history}\n\n"
+        f"FEEDBACK ALREADY GIVEN THIS SESSION:\n{_format_prior_feedback(prior_feedback or [])}\n"
     )
+
+
+def _format_prior_feedback(notes: list[str]) -> str:
+    cleaned = []
+    for note in notes:
+        text = re.sub(r"\s+", " ", note or "").strip()
+        if text and text != "candidate-question":
+            cleaned.append(text[:240])
+    if not cleaned:
+        return "None yet."
+    return "\n".join(f"- {note}" for note in cleaned[-12:])
 
 
 def _format_prior(prior: list[tuple[str, str]]) -> str:
@@ -493,7 +511,208 @@ def _format_prior(prior: list[tuple[str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
-def coach_from_payload(payload: Any, raw_text: str, transcript: str = "") -> tuple[str, str, str]:
+_STRESS_RE = re.compile(
+    r"(didn['’]t actually|did not actually|no reason to|"
+    r"doesn['’]t have a reason|does not have a reason|"
+    r"you failed|you missed|weakness|unfortunately|not an answer|off topic)",
+    re.IGNORECASE,
+)
+
+_SUGGESTION_MARKS = (
+    "next time",
+    "try ",
+    "try to",
+    "add ",
+    "open with",
+    "lead with",
+    "close with",
+    "start with",
+    "name ",
+    "mention ",
+    "put the",
+    "say what",
+)
+
+_OPENERS = (
+    "That was easy to listen to.",
+    "You sound warm and clear.",
+    "Nice and steady.",
+    "That came across as friendly.",
+    "Good energy there.",
+    "Pleasant to hear.",
+    "You kept it human, which helps.",
+    "Clear and calm.",
+    "That felt genuine.",
+    "Easy to follow.",
+    "You sound ready for this.",
+    "Lovely tone.",
+    "That was light and confident.",
+    "Smooth and easy to hear.",
+    "You sound thoughtful there.",
+    "Bright and clear.",
+    "That landed well.",
+    "Calm and easy to trust.",
+    "A friendly start.",
+    "That was kind and clear.",
+    "You sound at ease.",
+    "Warm and straightforward.",
+    "That was pleasant to read.",
+    "A steady, likable answer.",
+    "You sound composed.",
+)
+
+_TIPS = (
+    "Next time, open with where you are now.",
+    "Try closing with the result in one line.",
+    "Lead with the point, then one thing you did.",
+    "Add why it fits this role, in a single line.",
+    "Name one real situation and how it turned out.",
+    "Start with the outcome, then how you got there.",
+    "Add one detail only you would know.",
+    "Say what changed because of your work.",
+    "Try one concrete example from your own path.",
+    "Put the point in the first sentence.",
+    "Mention one outcome you are glad about.",
+    "Next time, tie it to this role in one line.",
+    "Open with one earlier chapter of your work.",
+    "Next time, close with what you would do in this seat.",
+    "Next time, give one number or fact from that work.",
+    "Next time, say who you partnered with.",
+    "Start with the decision you made.",
+    "Name the constraint, then what you chose.",
+    "Next time, end with what you learned.",
+    "Next time, share one moment that shows how you work.",
+    "Next time, bring in the person you helped.",
+    "Say what you would keep and what you would change.",
+    "Open with the work you are proudest of.",
+    "Add the timeline in a few words.",
+    "Close with how the team felt afterward.",
+)
+
+
+def _sentences(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part.strip()]
+
+
+def _norm_note(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def _is_suggestion(sentence: str) -> bool:
+    lowered = sentence.lower()
+    return any(mark in lowered for mark in _SUGGESTION_MARKS)
+
+
+def _opener_key(text: str) -> str:
+    for sentence in _sentences(text):
+        if not _is_suggestion(sentence):
+            return _norm_note(sentence)
+    return ""
+
+
+def _tip_key(text: str) -> str:
+    for sentence in _sentences(text):
+        if _is_suggestion(sentence):
+            return _norm_note(sentence)
+    return ""
+
+
+def _too_close(left: str, right: str) -> bool:
+    a = set(_norm_note(left).split())
+    b = set(_norm_note(right).split())
+    if not a or not b:
+        return False
+    return len(a & b) / min(len(a), len(b)) >= 0.8
+
+
+def _seed(question: str, transcript: str, salt: str) -> int:
+    return sum(ord(ch) for ch in f"{question}|{transcript}|{salt}")
+
+
+def _unused(options: tuple[str, ...], used: set[str], question: str, transcript: str, salt: str) -> str:
+    start = _seed(question, transcript, salt) % len(options)
+    for offset in range(len(options)):
+        choice = options[(start + offset) % len(options)]
+        if _norm_note(choice) not in used:
+            return choice
+    return options[start]
+
+
+def _short_clause(sentence: str, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", sentence).strip()
+    if len(cleaned.split()) <= limit:
+        return _finish_sentence(cleaned)
+    chunks = [part.strip() for part in cleaned.split(",") if part.strip()]
+    if len(chunks) >= 2 and len(chunks[0].split()) <= 3:
+        kept = ", ".join(chunks[:2])
+    elif chunks:
+        kept = chunks[0]
+    else:
+        kept = cleaned
+    if len(kept.split()) > limit:
+        kept = " ".join(kept.split()[:limit])
+    return _finish_sentence(kept)
+
+
+def _compose_feedback(text: str) -> tuple[str, str, str]:
+    sentences = [sentence for sentence in _sentences(text) if not _STRESS_RE.search(sentence)]
+    warm = [_short_clause(sentence, 22) for sentence in sentences if not _is_suggestion(sentence)]
+    tips = [_short_clause(sentence, 16) for sentence in sentences if _is_suggestion(sentence)]
+    opener = warm[0] if warm else ""
+    tip = tips[0] if tips else ""
+    note = f"{opener} {tip}".strip()
+    words = note.split()
+    if len(words) > 42:
+        note = _finish_sentence(" ".join(words[:42]))
+    return note, opener, tip
+
+
+def _fresh_feedback(opener: str, tip: str, question: str, transcript: str, prior: list[str]) -> str:
+    used_openers = {_opener_key(item) for item in prior if item.strip()}
+    used_tips = {_tip_key(item) for item in prior if item.strip()}
+    chosen_opener = opener or _unused(_OPENERS, used_openers, question, transcript, "opener")
+    chosen_tip = tip or _unused(_TIPS, used_tips, question, transcript, "tip")
+    if _norm_note(chosen_opener) == _norm_note(chosen_tip):
+        chosen_tip = _unused(_TIPS, used_tips | {_norm_note(chosen_tip)}, question, transcript, "tip-alt")
+    return f"{_finish_sentence(chosen_opener)} {_finish_sentence(chosen_tip)}".strip()
+
+
+def shape_feedback(
+    text: str,
+    *,
+    question: str = "",
+    transcript: str = "",
+    prior_notes: list[str] | None = None,
+) -> str:
+    """One brief, cheerful note that does not repeat feedback already given."""
+    prior = [note.strip() for note in (prior_notes or []) if note and note.strip()]
+    note, opener, tip = _compose_feedback(text)
+    if not note:
+        return _fresh_feedback("", "", question, transcript, prior)
+    if not prior:
+        return note
+    opener_used = bool(opener) and any(opener and _norm_note(opener) == _opener_key(item) for item in prior)
+    tip_used = bool(tip) and any(tip and _norm_note(tip) == _tip_key(item) for item in prior)
+    close = any(_norm_note(note) == _norm_note(item) or _too_close(note, item) for item in prior)
+    if not opener_used and not tip_used and not close:
+        return note
+    return _fresh_feedback(
+        "" if opener_used or close else opener,
+        "" if tip_used or close else tip,
+        question,
+        transcript,
+        prior,
+    )
+
+
+def coach_from_payload(
+    payload: Any,
+    raw_text: str,
+    transcript: str = "",
+    *,
+    question: str = "",
+    prior_notes: list[str] | None = None,
+) -> tuple[str, str, str]:
     if not isinstance(payload, dict):
         raise ValueError("The model did not return an answer.")
     answer = str(payload.get("answer") or "").strip()
@@ -503,8 +722,7 @@ def coach_from_payload(payload: Any, raw_text: str, transcript: str = "") -> tup
         answer = raw_text.strip()
     if not answer:
         raise ValueError("The model returned an empty answer.")
-    if not guidance:
-        guidance = "That already has a clear point. Next time, add the result in one sentence."
+    guidance = shape_feedback(guidance, question=question, transcript=transcript, prior_notes=prior_notes)
     if is_non_answer(transcript) or _is_reassurance(bridge):
         bridge = ""
     return answer, guidance, bridge[:240]
