@@ -429,7 +429,7 @@ def consume_verification() -> None:
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
     st.caption("Your résumé and the role stay with your account.")
-    render_password_reset()
+    render_reset_link()
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
             try:
@@ -455,6 +455,7 @@ def render_login() -> None:
             "Create account" if mode == "Create account" else "Log in",
             use_container_width=True,
         )
+    render_forgot_password()
     render_about()
     render_contact("sign-in")
     if not submitted:
@@ -481,28 +482,32 @@ def render_login() -> None:
     st.rerun()
 
 
-def render_password_reset() -> None:
+def render_reset_link() -> None:
     token = query_value("reset")
-    if token:
-        st.subheader("Choose a new password")
-        with st.form("reset-password"):
-            password = st.text_input("New password", type="password")
-            confirm = st.text_input("Confirm new password", type="password")
-            submitted = st.form_submit_button("Update password")
-        if submitted:
-            if password != confirm:
-                st.error("Those passwords do not match.")
+    if not token:
+        return
+    st.subheader("Choose a new password")
+    with st.form("reset-password"):
+        password = st.text_input("New password", type="password")
+        confirm = st.text_input("Confirm new password", type="password")
+        submitted = st.form_submit_button("Update password")
+    if submitted:
+        if password != confirm:
+            st.error("Those passwords do not match.")
+        else:
+            try:
+                auth.reset_password(token, password)
+            except auth.AuthError as exc:
+                st.error(str(exc))
             else:
                 try:
-                    auth.reset_password(token, password)
-                except auth.AuthError as exc:
-                    st.error(str(exc))
-                else:
-                    try:
-                        del st.query_params["reset"]
-                    except Exception:
-                        pass
-                    st.success("Password updated. Log in with the new one.")
+                    del st.query_params["reset"]
+                except Exception:
+                    pass
+                st.success("Password updated. Log in with the new one.")
+
+
+def render_forgot_password() -> None:
     with st.expander("Forgot password"):
         with st.form("forgot-password"):
             reset_email = st.text_input("Email for a reset link")
