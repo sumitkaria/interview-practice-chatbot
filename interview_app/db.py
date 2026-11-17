@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, func, inspect, select, text
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, func, inspect, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -156,6 +156,14 @@ class PasswordReset(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+@dataclass(frozen=True)
+class StoredFileInfo:
+    id: str
+    kind: str
+    filename: str
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -559,6 +567,23 @@ def list_interviews(user_id: str, limit: int = 100, offset: int = 0) -> list[Int
             .limit(limit)
         ).all()
         return [_interview(row) for row in rows]
+
+
+def newest_interview_with_materials(user_id: str) -> InterviewRecord | None:
+    """Most recent interview that still has a job description or résumé."""
+    with session_scope() as session:
+        row = session.scalar(
+            select(Interview)
+            .where(
+                Interview.user_id == user_id,
+                or_(
+                    func.length(func.trim(Interview.job_description)) > 0,
+                    func.length(func.trim(Interview.resume_text)) > 0,
+                ),
+            )
+            .order_by(Interview.created_at.desc())
+        )
+        return _interview(row) if row else None
 
 
 def count_interviews(user_id: str) -> int:
@@ -1031,6 +1056,23 @@ def store_file(user_id: str, kind: str, filename: str, data: bytes, content_type
             )
         )
         return file_id
+
+
+def newest_stored_file(user_id: str, kind: str) -> StoredFileInfo | None:
+    with session_scope() as session:
+        row = session.scalar(
+            select(StoredFile)
+            .where(StoredFile.user_id == user_id, StoredFile.kind == kind)
+            .order_by(StoredFile.created_at.desc())
+        )
+        if row is None:
+            return None
+        return StoredFileInfo(
+            id=row.id,
+            kind=row.kind or "",
+            filename=row.filename or "",
+            created_at=row.created_at,
+        )
 
 
 def read_file(file_id: str, user_id: str) -> tuple[str, bytes] | None:

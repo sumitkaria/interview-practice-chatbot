@@ -325,6 +325,54 @@ def test_materials_survive_leaving_the_form_and_practice_saves_them():
     assert not ui.drafts_differ(updated, state)
 
 
+def test_blank_editor_does_not_erase_saved_materials():
+    user = auth.register_user("Sumit", "keep-materials@example.com", "correct horse")
+    db.save_profile(user.id, "Original job", "job.txt", "Original resume", "resume.txt", job_file_id="job-file", resume_file_id="resume-file")
+    state = {
+        "draft_marker": "stale",
+        "job_draft": "",
+        "resume_draft": "",
+        "job_text": "",
+        "resume_text": "",
+        "job_source": "",
+        "resume_source": "",
+        "job_file_id": "",
+        "resume_file_id": "",
+    }
+    ui.remember_drafts(state)
+    ui.autosave_materials(user.id, state=state)
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Original job"
+    assert saved.resume_text == "Original resume"
+    assert saved.job_file_id == "job-file"
+    assert saved.resume_file_id == "resume-file"
+    assert state["job_draft"] == "Original job"
+    assert state["resume_draft"] == "Original resume"
+
+    state["job_draft"] = "Updated job only"
+    ui.autosave_materials(user.id, state=state)
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Updated job only"
+    assert saved.resume_text == "Original resume"
+
+
+def test_blank_profile_is_restored_from_the_interview_or_file():
+    user = auth.register_user("Sumit", "restore-materials@example.com", "correct horse")
+    db.save_profile(user.id, "Director of Analytics", "role.txt", "Led the data team", "resume.txt")
+    db.create_interview(user.id, "Director of Analytics", "Led the data team", ["Tell me about yourself."])
+    db.save_profile(user.id, "", "", "", "")
+    restored = ui.repair_saved_materials(user.id, db.get_profile(user.id))
+    assert restored.job_description == "Director of Analytics"
+    assert restored.resume_text == "Led the data team"
+
+    other = auth.register_user("Case", "restore-file@example.com", "correct horse")
+    db.store_file(other.id, "resume", "background.txt", b"Product manager resume")
+    from_file = ui.repair_saved_materials(other.id, None)
+    assert from_file is not None
+    assert from_file.resume_text == "Product manager resume"
+    assert from_file.job_description == ""
+
+
 def test_prepare_database_url_fixes_a_leading_dot_when_credentials_exist():
     prepared = config.prepare_database_url(
         "postgresql://neondb_owner:secret@.ep-cool.us-east-2.aws.neon.tech/neondb?sslmode=require"
