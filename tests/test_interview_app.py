@@ -177,8 +177,24 @@ def test_interview_history_keeps_older_interviews():
     assert ui.uploaded_name("ATB job description.docx", "Role text", "Pasted job description") == "ATB job description.docx"
     assert ui.uploaded_name("Pasted text", "Role text", "Pasted job description") == "Pasted job description"
     assert ui.uploaded_name("", "", "Pasted job description") == "Nothing uploaded yet"
+    assert ui.uploaded_file_label("ATB job description.docx", "Role text") == "ATB job description.docx"
+    assert ui.uploaded_file_label("Pasted text", "Role text") == ""
+    assert ui.uploaded_file_label("", "Role text") == ""
+    assert ui.uploaded_file_label("resume.pdf", "   ") == ""
     assert ui.interview_history_label(first).startswith("CFO, Capital Markets at ATB Financial · ")
     assert "in progress" in ui.interview_history_label(second)
+
+
+def test_app_copy_says_resume():
+    for path in (ROOT / "interview_app").rglob("*"):
+        if path.suffix not in {".py", ".html"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "ésumé" not in text
+        assert "Ésumé" not in text
+    screen = (ROOT / "interview_app" / "ui.py").read_text(encoding="utf-8")
+    assert screen.count("Paste or Edit the text") == 1
+    assert "Edit the text" not in screen.replace("Paste or Edit the text", "")
 
 
 def test_interview_name_comes_from_the_job_description():
@@ -420,9 +436,9 @@ def _assert_ran(app: AppTest) -> None:
     assert not failures, failures
 
 
-def _area(app: AppTest, label: str) -> str:
-    found = [area.value for area in app.text_area if area.label == label]
-    assert found, [area.label for area in app.text_area]
+def _area(app: AppTest, key: str) -> str:
+    found = [area.value for area in app.text_area if area.key == key]
+    assert found, [area.key for area in app.text_area]
     return found[0]
 
 
@@ -433,40 +449,40 @@ def test_file_uploads_update_the_other_editor_without_crashing():
     app.session_state["uid"] = user.id
     app.run()
     _assert_ran(app)
-    assert _area(app, "Job description text") == "Original job"
-    assert _area(app, "Résumé text") == "Original resume"
+    assert _area(app, "job_draft") == "Original job"
+    assert _area(app, "resume_draft") == "Original resume"
 
-    resume_uploader = next(item for item in app.file_uploader if item.label == "Update résumé")
+    resume_uploader = next(item for item in app.file_uploader if item.label == "Upload resume")
     resume_uploader.upload("background.txt", b"Led the platform team", "text/plain")
     app.run()
     _assert_ran(app)
-    assert _area(app, "Job description text") == "Original job"
-    assert _area(app, "Résumé text") == "Led the platform team"
+    assert _area(app, "job_draft") == "Original job"
+    assert _area(app, "resume_draft") == "Led the platform team"
     saved = db.get_profile(user.id)
     assert saved.job_description == "Original job"
     assert saved.resume_text == "Led the platform team"
     assert saved.resume_source == "background.txt"
     assert saved.resume_file_id
 
-    job_uploader = next(item for item in app.file_uploader if item.label == "Update job description")
+    job_uploader = next(item for item in app.file_uploader if item.label == "Upload job description")
     job_uploader.upload("role.txt", b"Director of analytics", "text/plain")
     app.run()
     _assert_ran(app)
-    assert _area(app, "Job description text") == "Director of analytics"
-    assert _area(app, "Résumé text") == "Led the platform team"
+    assert _area(app, "job_draft") == "Director of analytics"
+    assert _area(app, "resume_draft") == "Led the platform team"
     saved = db.get_profile(user.id)
     assert saved.job_description == "Director of analytics"
     assert saved.job_source == "role.txt"
     assert saved.resume_text == "Led the platform team"
     assert saved.job_file_id
 
-    job_uploader = next(item for item in app.file_uploader if item.label == "Update job description")
+    job_uploader = next(item for item in app.file_uploader if item.label == "Upload job description")
     job_uploader.upload("slides.pptx", b"not a real deck", "application/vnd.ms-powerpoint")
     app.run()
     _assert_ran(app)
     assert any("could not be read" in item.value for item in app.error)
-    assert _area(app, "Job description text") == "Director of analytics"
-    assert _area(app, "Résumé text") == "Led the platform team"
+    assert _area(app, "job_draft") == "Director of analytics"
+    assert _area(app, "resume_draft") == "Led the platform team"
     saved = db.get_profile(user.id)
     assert saved.job_description == "Director of analytics"
     assert saved.resume_text == "Led the platform team"

@@ -617,7 +617,7 @@ def list_interviews(user_id: str, limit: int = 100, offset: int = 0) -> list[Int
 
 
 def newest_interview_with_materials(user_id: str) -> InterviewRecord | None:
-    """Most recent interview that still has a job description or résumé."""
+    """Most recent interview that still has a job description or resume."""
     with session_scope() as session:
         row = session.scalar(
             select(Interview)
