@@ -282,6 +282,16 @@ def inject_css() -> None:
         .studio .brief-line { font-size: 1.08rem; line-height: 1.45; margin: 0 0 0.55rem; color: var(--ink); }
         .studio .ask { font-size: 1.65rem; font-weight: 650; line-height: 1.3; letter-spacing: -0.03em; margin: 0 0 0.85rem; color: var(--ink); }
         .studio .count { color: var(--brass); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+        .rehearsal {
+            color: var(--ink);
+            font-size: 1.08rem;
+            line-height: 1.5;
+            margin: 0 0 0.75rem;
+            max-width: 46rem;
+        }
+        .block-container:has(.rehearsal) [data-testid="stColumn"]:has(.left-rail) {
+            height: calc(100vh - 8rem);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -426,9 +436,21 @@ def consume_verification() -> None:
         pass
 
 
+def render_rehearsal_line() -> None:
+    st.markdown(
+        "<p class='rehearsal'>Interview Practice is a private rehearsal. "
+        "You add a job and a résumé, then speak or type through one interview at a time.</p>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
-    st.caption("Your résumé and the role stay with your account.")
+    render_rehearsal_line()
+    st.caption(
+        "For every candidate: the interview, a résumé written for the role, "
+        "communication practice, and the cold email or message."
+    )
     render_reset_link()
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
@@ -456,7 +478,6 @@ def render_login() -> None:
             use_container_width=True,
         )
     render_forgot_password()
-    render_about()
     render_contact("sign-in")
     if not submitted:
         return
@@ -523,14 +544,6 @@ def render_forgot_password() -> None:
                 st.success("If that email has a password account, a reset link is on its way.")
 
 
-def render_about() -> None:
-    with st.expander("About this app"):
-        st.write(
-            "Interview Practice is a private rehearsal. You add a job and a résumé, "
-            "then speak or type through one interview at a time."
-        )
-
-
 def render_contact(prefix: str) -> None:
     address = config.contact_email()
     with st.expander("Contact us"):
@@ -572,6 +585,7 @@ def render_app(user: db.UserRecord) -> None:
             st.session_state["materials_restored"] = True
         profile = repaired
     ensure_drafts(user, profile)
+    render_rehearsal_line()
     rail, stage = st.columns([1, 1.65], gap="medium")
     with rail:
         st.markdown('<div class="left-rail"></div>', unsafe_allow_html=True)
