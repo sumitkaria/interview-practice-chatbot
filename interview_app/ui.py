@@ -286,8 +286,11 @@ def inject_css() -> None:
             color: var(--ink);
             font-size: 1.08rem;
             line-height: 1.5;
-            margin: 0 0 0.35rem;
-            max-width: 40rem;
+            margin: 0 0 0.75rem;
+            max-width: 46rem;
+        }
+        .block-container:has(.rehearsal) [data-testid="stColumn"]:has(.left-rail) {
+            height: calc(100vh - 8rem);
         }
         </style>
         """,
@@ -582,6 +585,7 @@ def render_app(user: db.UserRecord) -> None:
             st.session_state["materials_restored"] = True
         profile = repaired
     ensure_drafts(user, profile)
+    render_rehearsal_line()
     rail, stage = st.columns([1, 1.65], gap="medium")
     with rail:
         st.markdown('<div class="left-rail"></div>', unsafe_allow_html=True)
