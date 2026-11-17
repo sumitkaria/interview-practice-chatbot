@@ -169,8 +169,24 @@ def test_interview_history_keeps_older_interviews():
     assert ui.uploaded_name("ATB job description.docx", "Role text", "Pasted job description") == "ATB job description.docx"
     assert ui.uploaded_name("Pasted text", "Role text", "Pasted job description") == "Pasted job description"
     assert ui.uploaded_name("", "", "Pasted job description") == "Nothing uploaded yet"
+    assert ui.uploaded_file_label("ATB job description.docx", "Role text") == "ATB job description.docx"
+    assert ui.uploaded_file_label("Pasted text", "Role text") == ""
+    assert ui.uploaded_file_label("", "Role text") == ""
+    assert ui.uploaded_file_label("resume.pdf", "   ") == ""
     assert ui.interview_history_label(first).startswith("CFO, Capital Markets at ATB Financial · ")
     assert "in progress" in ui.interview_history_label(second)
+
+
+def test_app_copy_says_resume():
+    for path in (ROOT / "interview_app").rglob("*"):
+        if path.suffix not in {".py", ".html"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "ésumé" not in text
+        assert "Ésumé" not in text
+    screen = (ROOT / "interview_app" / "ui.py").read_text(encoding="utf-8")
+    assert screen.count("Paste or Edit the text") == 1
+    assert "Edit the text" not in screen.replace("Paste or Edit the text", "")
 
 
 def test_interview_name_comes_from_the_job_description():

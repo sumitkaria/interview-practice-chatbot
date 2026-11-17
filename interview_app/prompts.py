@@ -62,7 +62,7 @@ Write them in this order:
 25. Anything about their experience they want understood before you close your questions.
 
 Do not use question 25 to ask whether they have questions for you. That happens after these 25.
-Sound like a person across a table. No numbering, no "as a hiring manager", and do not mention the résumé or the job description as documents. Do not say the interview will be easy.
+Sound like a person across a table. No numbering, no "as a hiring manager", and do not mention the resume or the job description as documents. Do not say the interview will be easy.
 """.strip()
 
 COACH_INSTRUCTIONS = """

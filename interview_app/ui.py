@@ -216,6 +216,15 @@ def inject_css() -> None:
             display: flex;
             flex-direction: column;
             min-height: 100%;
+            height: auto !important;
+            flex: 1 0 auto !important;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stVerticalBlock"] > div {
+            flex-shrink: 0 !important;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stElementContainer"]:has([data-testid="stTextArea"]) {
+            height: auto !important;
+            overflow: visible !important;
         }
         [data-testid="stColumn"]:has(.left-rail) [data-testid="stVerticalBlock"] > div:has(.sidebar-history-anchor) {
             margin-top: auto;
@@ -242,7 +251,6 @@ def inject_css() -> None:
         .brand-tag { color: var(--brass); font-size: 0.92rem; font-weight: 600; margin-top: 0.12rem; }
         .account-name { font-weight: 650; color: var(--ink); margin-top: 0.8rem; }
         .account-email { color: #24312C; font-size: 0.92rem; margin-bottom: 0.85rem; }
-        .files { margin: 0.2rem 0 0.6rem; }
         .file-label {
             color: var(--forest);
             font-size: 0.78rem;
@@ -251,6 +259,10 @@ def inject_css() -> None:
             text-transform: uppercase;
             margin-top: 0.85rem;
         }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stElementContainer"]:has(.file-label),
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="element-container"]:has(.file-label) {
+            margin-bottom: 0.15rem;
+        }
         .file {
             color: #14221E;
             font-weight: 650;
@@ -258,6 +270,33 @@ def inject_css() -> None:
             line-height: 1.35;
             padding: 0.15rem 0 0.35rem;
             word-break: break-word;
+        }
+        .uploaded-file {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            color: #14221E;
+            font-weight: 650;
+            font-size: 0.92rem;
+            line-height: 1.35;
+            padding: 0.55rem 0.7rem;
+            word-break: break-word;
+        }
+        [data-testid="stHorizontalBlock"]:has(.uploaded-file) {
+            align-items: center;
+        }
+        [data-testid="stColumn"]:has(.uploaded-file) [data-testid="stDownloadButton"] button {
+            background: transparent;
+            color: var(--forest);
+            border: 1px solid #C4BBA9;
+            border-radius: 10px;
+            font-weight: 650;
+            min-height: 2.1rem;
+            padding: 0.2rem 0.65rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stTextArea"] [data-testid="stWidgetLabel"] {
+            color: #24312C;
+            font-weight: 650;
         }
         .history-title {
             color: var(--forest);
@@ -428,7 +467,7 @@ def consume_verification() -> None:
 
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
-    st.caption("Your résumé and the role stay with your account.")
+    st.caption("Your resume and the role stay with your account.")
     render_reset_link()
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
@@ -526,7 +565,7 @@ def render_forgot_password() -> None:
 def render_about() -> None:
     with st.expander("About this app"):
         st.write(
-            "Interview Practice is a private rehearsal. You add a job and a résumé, "
+            "Interview Practice is a private rehearsal. You add a job and a resume, "
             "then speak or type through one interview at a time."
         )
 
@@ -589,9 +628,9 @@ def render_app(user: db.UserRecord) -> None:
         if choice in {"new", "new-profile"}:
             st.title(practice_heading(profile, None))
             if choice == "new-profile":
-                st.write("Update the job description and résumé on the left, then start.")
+                st.write("Update the job description and resume on the left, then start.")
             if not profile_ready(profile):
-                st.write("Add a job description and your résumé on the left, then begin.")
+                st.write("Add a job description and your resume on the left, then begin.")
                 return
             render_start(user, profile)
             return
@@ -600,7 +639,7 @@ def render_app(user: db.UserRecord) -> None:
             render_practice(user, profile, interview)
             return
         if not profile_ready(profile):
-            st.write("Add a job description and your résumé on the left, then begin.")
+            st.write("Add a job description and your resume on the left, then begin.")
             return
         render_practice(user, profile, interview)
 
@@ -628,13 +667,13 @@ def render_session_choices(profile: db.ProfileRecord | None, interview: db.Inter
         st.session_state.selected_interview_id = interview.id
         st.rerun()
     if profile_ready(profile) and st.button(
-        "Start a new interview with this job and résumé",
+        "Start a new interview with this job and resume",
         use_container_width=True,
     ):
         st.session_state.practice_choice = "new"
         st.session_state.selected_interview_id = None
         st.rerun()
-    if st.button("Start a new interview with a different job and résumé", use_container_width=True):
+    if st.button("Start a new interview with a different job and resume", use_container_width=True):
         st.session_state.practice_choice = "new-profile"
         st.session_state.selected_interview_id = None
         st.rerun()
@@ -710,6 +749,16 @@ def uploaded_name(source: str, text: str, pasted_label: str) -> str:
     return pasted_label
 
 
+def uploaded_file_label(source: str, text: str) -> str:
+    """Filename to show beside the upload button. Pasted text has no file."""
+    if not (text or "").strip():
+        return ""
+    cleaned = (source or "").strip()
+    if not cleaned or cleaned == "Pasted text":
+        return ""
+    return cleaned
+
+
 def interview_history_label(interview: db.InterviewRecord) -> str:
     name = (interview.role_name or "").strip() or prompts.interview_name(interview.job_description)
     if not name or name == "Practice":
@@ -763,42 +812,34 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         + "</div>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        "<div class='files'>"
-        "<div class='file-label'>Job description</div>"
-        f"<div class='file'>{html.escape(uploaded_name(job_source, job_text, 'Pasted job description'))}</div>"
-        "<div class='file-label'>Résumé</div>"
-        f"<div class='file'>{html.escape(uploaded_name(resume_source, resume_text, 'Pasted résumé'))}</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    offer_download(user.id, str(st.session_state.get("job_file_id") or ""), "Download job file", f"dl_job_{user.id}")
-    offer_download(
-        user.id,
-        str(st.session_state.get("resume_file_id") or ""),
-        "Download résumé file",
-        f"dl_resume_{user.id}",
-    )
     render_sidebar_editor(
         user,
-        upload_label="Update job description",
-        paste_label="Job description text",
+        heading="Job description",
+        upload_label="Upload job description",
         draft_key="job_draft",
         source_key="job_source",
         sig_key="job_upload_sig",
         upload_key=f"job_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+        file_id=str(st.session_state.get("job_file_id") or ""),
+        download_key=f"dl_job_{user.id}",
+        source=job_source,
+        text=job_text,
     )
     render_sidebar_editor(
         user,
-        upload_label="Update résumé",
-        paste_label="Résumé text",
+        heading="Resume",
+        upload_label="Upload resume",
         draft_key="resume_draft",
         source_key="resume_source",
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
+        file_id=str(st.session_state.get("resume_file_id") or ""),
+        download_key=f"dl_resume_{user.id}",
+        source=resume_source,
+        text=resume_text,
     )
     if st.session_state.pop("materials_restored", False):
-        st.caption("Your job description and résumé are back on this account.")
+        st.caption("Your job description and resume are back on this account.")
     note = st.session_state.get("storage_note")
     if note:
         st.caption(note)
@@ -818,32 +859,52 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
 def render_sidebar_editor(
     user: db.UserRecord,
     *,
+    heading: str,
     upload_label: str,
-    paste_label: str,
     draft_key: str,
     source_key: str,
     sig_key: str,
     upload_key: str,
+    file_id: str,
+    download_key: str,
+    source: str,
+    text: str,
 ) -> None:
-    uploads = st.file_uploader(
-        upload_label,
-        accept_multiple_files=True,
-        key=upload_key,
-        help="10MB max file size",
-    )
+    st.markdown(f"<div class='file-label'>{html.escape(heading)}</div>", unsafe_allow_html=True)
+    saved_name = uploaded_file_label(source, text)
+
+    def place_uploader():
+        return st.file_uploader(
+            upload_label,
+            accept_multiple_files=True,
+            key=upload_key,
+            help="10MB max file size",
+            label_visibility="collapsed",
+        )
+
+    if saved_name:
+        upload_box, name_box = st.columns([1.05, 1], gap="small", vertical_alignment="center")
+        with upload_box:
+            uploads = place_uploader()
+        with name_box:
+            st.markdown(
+                f"<div class='uploaded-file'>{html.escape(saved_name)}</div>",
+                unsafe_allow_html=True,
+            )
+            offer_download(user.id, file_id, "Download", download_key)
+    else:
+        uploads = place_uploader()
     apply_upload(uploads, sig_key, draft_key, source_key, image_reader_for(user.id), user.id)
     error = st.session_state.get(sig_key + "_error")
     if error:
         st.error(error)
-    with st.expander("Edit the text"):
-        st.text_area(
-            paste_label,
-            key=draft_key,
-            height=140,
-            label_visibility="collapsed",
-            on_change=autosave_materials,
-            args=(user.id,),
-        )
+    st.text_area(
+        "Paste or Edit the text",
+        key=draft_key,
+        height=140,
+        on_change=autosave_materials,
+        args=(user.id,),
+    )
 
 
 def render_interview_history(user_id: str) -> None:
@@ -923,7 +984,7 @@ def render_account(user: db.UserRecord) -> None:
             mime="application/json",
             key=f"export_{user.id}",
         )
-        st.caption("Deleting the account removes the résumé, interviews, and stored files.")
+        st.caption("Deleting the account removes the resume, interviews, and stored files.")
         confirm = st.text_input("Type your email to delete the account", key=f"delete_email_{user.id}")
         if st.button("Delete account", key=f"delete_{user.id}"):
             if confirm.strip().lower() != user.email:
@@ -1054,7 +1115,7 @@ def _recover_side(
 
 
 def repair_saved_materials(user_id: str, profile: db.ProfileRecord | None) -> db.ProfileRecord | None:
-    """Put back a job description or résumé that a blank editor saved over."""
+    """Put back a job description or resume that a blank editor saved over."""
     job = profile.job_description if profile else ""
     resume = profile.resume_text if profile else ""
     if job.strip() and resume.strip():
@@ -1107,6 +1168,15 @@ def _materials_were_restored(before: db.ProfileRecord | None, after: db.ProfileR
     )
 
 
+def _write_draft(state, key: str, value: str) -> None:
+    """Store editor text. Skip a box that Streamlit has already drawn this run."""
+    try:
+        state[key] = value
+    except Exception as exc:
+        if "Widget" not in type(exc).__name__:
+            raise
+
+
 def autosave_materials(user_id: str, *, clear_uploads: bool = False, state=None) -> None:
     state = st.session_state if state is None else state
     profile = db.get_profile(user_id)
@@ -1154,8 +1224,9 @@ def autosave_materials(user_id: str, *, clear_uploads: bool = False, state=None)
         state["draft_marker"] = user_id + ":" + saved.updated_at.isoformat()
         state["job_text"] = job
         state["resume_text"] = resume
-        state["job_draft"] = job
-        state["resume_draft"] = resume
+        # The other text box is already on the page when the second file is saved.
+        _write_draft(state, "job_draft", job)
+        _write_draft(state, "resume_draft", resume)
         state["job_source"] = job_source
         state["resume_source"] = resume_source
         if job_file_id:
@@ -1222,7 +1293,7 @@ def render_practice(
 
 def render_session_files(user_id: str, interview: db.InterviewRecord) -> None:
     job = uploaded_name(interview.job_source, interview.job_description, "Pasted job description")
-    resume = uploaded_name(interview.resume_source, interview.resume_text, "Pasted résumé")
+    resume = uploaded_name(interview.resume_source, interview.resume_text, "Pasted resume")
     st.markdown(
         "<div class='session-files'>"
         "<div class='file-label'>Files for this session</div>"
@@ -1232,7 +1303,7 @@ def render_session_files(user_id: str, interview: db.InterviewRecord) -> None:
         unsafe_allow_html=True,
     )
     offer_download(user_id, interview.job_file_id, "Download job file", f"dl_session_job_{interview.id}")
-    offer_download(user_id, interview.resume_file_id, "Download résumé file", f"dl_session_resume_{interview.id}")
+    offer_download(user_id, interview.resume_file_id, "Download resume file", f"dl_session_resume_{interview.id}")
 
 
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:

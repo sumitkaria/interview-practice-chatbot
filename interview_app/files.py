@@ -1,4 +1,4 @@
-"""Read job descriptions and résumés from common file types."""
+"""Read job descriptions and resumes from common file types."""
 
 from __future__ import annotations
 
