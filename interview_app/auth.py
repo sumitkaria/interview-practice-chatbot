@@ -194,7 +194,7 @@ def request_password_reset(email: str) -> None:
     from interview_app import mailer
 
     if not mailer.configured():
-        raise AuthError("Password reset by email is not set up yet. Change it from Account after you sign in.")
+        raise AuthError("The reset email could not be sent. Use Contact us.")
     user = db.get_user_by_email(normalize_email(email))
     if user is None or not user.password_hash:
         return

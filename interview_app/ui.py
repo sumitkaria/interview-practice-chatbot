@@ -40,6 +40,7 @@ _VIEW_KEYS = {
     "storage_note",
     "materials_restored",
     "materials_repair_checked",
+    "practice_choice",
 }
 
 
@@ -455,6 +456,7 @@ def render_login() -> None:
             use_container_width=True,
         )
     render_about()
+    render_contact("sign-in")
     if not submitted:
         return
     try:
@@ -501,22 +503,19 @@ def render_password_reset() -> None:
                     except Exception:
                         pass
                     st.success("Password updated. Log in with the new one.")
-    if mailer.configured():
-        with st.expander("Forgot password"):
-            with st.form("forgot-password"):
-                reset_email = st.text_input("Email for a reset link")
-                send = st.form_submit_button("Email a reset link")
-            if send:
-                try:
-                    auth.request_password_reset(reset_email)
-                except auth.AuthError as exc:
-                    st.error(str(exc))
-                except Exception:
-                    st.error("The email could not be sent.")
-                else:
-                    st.success("If that email has a password account, a reset link is on its way.")
-    else:
-        st.caption("Password reset by email is not set up. After you sign in, change the password from Account.")
+    with st.expander("Forgot password"):
+        with st.form("forgot-password"):
+            reset_email = st.text_input("Email for a reset link")
+            send = st.form_submit_button("Email a reset link")
+        if send:
+            try:
+                auth.request_password_reset(reset_email)
+            except auth.AuthError as exc:
+                st.error(str(exc))
+            except Exception:
+                st.error("The email could not be sent. Use Contact us.")
+            else:
+                st.success("If that email has a password account, a reset link is on its way.")
 
 
 def render_about() -> None:
@@ -525,6 +524,34 @@ def render_about() -> None:
             "Interview Practice is a private rehearsal. You add a job and a résumé, "
             "then speak or type through one interview at a time."
         )
+
+
+def render_contact(prefix: str) -> None:
+    address = config.contact_email()
+    with st.expander("Contact us"):
+        st.markdown(f"[{address}](mailto:{address})")
+        with st.form(f"contact-{prefix}"):
+            reply = st.text_input("Your email")
+            message = st.text_area("Message", height=120)
+            send = st.form_submit_button("Send")
+        if not send:
+            return
+        cleaned = (message or "").strip()
+        if not cleaned:
+            st.error("Write a message first.")
+            return
+        try:
+            db.save_contact_message(reply, cleaned)
+            if mailer.configured():
+                mailer.send_email(
+                    address,
+                    "Interview Practice message",
+                    f"From: {reply.strip() or 'not given'}\n\n{cleaned}\n",
+                )
+        except Exception:
+            st.error("The message could not be sent. Email us directly.")
+            return
+        st.success("Message sent. We'll reply by email.")
 
 
 def render_app(user: db.UserRecord) -> None:
@@ -546,7 +573,24 @@ def render_app(user: db.UserRecord) -> None:
             st.success("Saved. It will be here the next time you sign in.")
         profile = persist_complete_drafts(user.id, profile)
         interview = current_interview(user.id)
+        choice = st.session_state.get("practice_choice")
+        if interview is not None and choice not in {"continue", "new", "new-profile"}:
+            st.title("Practice")
+            render_session_choices(profile, interview)
+            return
+        if choice in {"new", "new-profile"}:
+            st.title(practice_heading(profile, None))
+            if choice == "new-profile":
+                st.write("Update the job description and résumé on the left, then start.")
+            if not profile_ready(profile):
+                st.write("Add a job description and your résumé on the left, then begin.")
+                return
+            render_start(user, profile)
+            return
         st.title(practice_heading(profile, heading_interview(interview)))
+        if choice == "continue" and interview is not None and interview.status == "active":
+            render_practice(user, profile, interview)
+            return
         if not profile_ready(profile):
             st.write("Add a job description and your résumé on the left, then begin.")
             return
@@ -567,6 +611,25 @@ def practice_heading(profile: db.ProfileRecord | None, interview: db.InterviewRe
 
 def profile_ready(profile: db.ProfileRecord | None) -> bool:
     return bool(profile and profile.job_description.strip() and profile.resume_text.strip())
+
+
+def render_session_choices(profile: db.ProfileRecord | None, interview: db.InterviewRecord) -> None:
+    st.subheader(interview_history_label(interview))
+    if st.button("Continue previous interview", type="primary", use_container_width=True):
+        st.session_state.practice_choice = "continue"
+        st.session_state.selected_interview_id = interview.id
+        st.rerun()
+    if profile_ready(profile) and st.button(
+        "Start a new interview with this job and résumé",
+        use_container_width=True,
+    ):
+        st.session_state.practice_choice = "new"
+        st.session_state.selected_interview_id = None
+        st.rerun()
+    if st.button("Start a new interview with a different job and résumé", use_container_width=True):
+        st.session_state.practice_choice = "new-profile"
+        st.session_state.selected_interview_id = None
+        st.rerun()
 
 
 def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None, state=None) -> None:
@@ -732,6 +795,8 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
     if note:
         st.caption(note)
     render_account(user)
+    render_contact(f"sidebar-{user.id}")
+    render_change_password(user)
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()
@@ -791,6 +856,7 @@ def render_interview_history(user_id: str) -> None:
             use_container_width=True,
         ):
             st.session_state.selected_interview_id = interview.id
+            st.session_state.practice_choice = "continue"
             st.session_state.confirm_restart = False
             st.rerun()
     if total > len(interviews):
@@ -805,6 +871,26 @@ def offer_download(user_id: str, file_id: str, label: str, key: str) -> None:
         return
     name, data = found
     st.download_button(label, data=data, file_name=name, key=key)
+
+
+def render_change_password(user: db.UserRecord) -> None:
+    if not user.password_hash:
+        return
+    with st.expander("Change password"):
+        with st.form(f"change-password-{user.id}"):
+            current = st.text_input("Current password", type="password")
+            new_password = st.text_input("New password", type="password")
+            change = st.form_submit_button("Change password")
+        if not change:
+            return
+        try:
+            auth.change_password(user.id, current, new_password)
+        except auth.AuthError as exc:
+            st.error(str(exc))
+            return
+        st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
+        st.session_state.password_updated = True
+        st.rerun()
 
 
 def render_account(user: db.UserRecord) -> None:
@@ -829,20 +915,6 @@ def render_account(user: db.UserRecord) -> None:
             mime="application/json",
             key=f"export_{user.id}",
         )
-        if user.password_hash:
-            with st.form("change-password"):
-                current = st.text_input("Current password", type="password")
-                new_password = st.text_input("New password", type="password")
-                change = st.form_submit_button("Change password")
-            if change:
-                try:
-                    auth.change_password(user.id, current, new_password)
-                except auth.AuthError as exc:
-                    st.error(str(exc))
-                else:
-                    st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
-                    st.session_state.password_updated = True
-                    st.rerun()
         st.caption("Deleting the account removes the résumé, interviews, and stored files.")
         confirm = st.text_input("Type your email to delete the account", key=f"delete_email_{user.id}")
         if st.button("Delete account", key=f"delete_{user.id}"):
@@ -852,6 +924,14 @@ def render_account(user: db.UserRecord) -> None:
                 db.delete_account(user.id)
                 request_logout()
         if config.is_admin(user.email):
+            st.markdown("**Messages**")
+            messages = db.recent_contact_messages()
+            if not messages:
+                st.caption("No messages yet.")
+            for created, reply_email, message in messages:
+                when = created.strftime("%b %d %H:%M") if created else ""
+                st.caption(f"{when} · {reply_email or 'no email'}")
+                st.write(message)
             st.markdown("**Recent problems**")
             events = db.recent_events("error", limit=20)
             if not events:
@@ -1491,7 +1571,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
             db.set_bridge(interview.id, index + 1, bridge)
     except grok_client.GrokError as exc:
         st.error(str(exc))
-        if st.button("Try Grok again"):
+        if st.button("Try again"):
             st.rerun()
         if st.button("Record again"):
             discard_attempt(interview.id, index, attempt)

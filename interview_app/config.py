@@ -182,13 +182,21 @@ def public_app_url() -> str:
     return value.rstrip("/") or "https://interviewpractice.streamlit.app"
 
 
+def contact_email() -> str:
+    value = (secret("CONTACT_EMAIL") or "sumitkaria11@gmail.com").strip()
+    return value or "sumitkaria11@gmail.com"
+
+
 def admin_emails() -> set[str]:
     raw = secret("ADMIN_EMAILS") or ""
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 def is_admin(email: str) -> bool:
-    return email.strip().lower() in admin_emails()
+    allowed = admin_emails()
+    if not allowed:
+        allowed = {contact_email().lower()}
+    return email.strip().lower() in allowed
 
 
 def smtp_settings() -> dict[str, str | int] | None:
