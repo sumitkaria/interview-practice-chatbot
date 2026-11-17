@@ -254,8 +254,19 @@ def test_normalize_questions_and_coach_prompt():
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
     assert "ANSWER SHAPE: career_story" in thin
-    full = prompts.coach_input("job", "resume", "Tell me about yourself.", "I spent four years building hiring tools for clinics")
+    full = prompts.coach_input(
+        "job",
+        "resume",
+        "Tell me about yourself.",
+        "I spent four years building hiring tools for clinics",
+        prior_feedback=["That was easy to listen to. Next time, open with where you are now."],
+    )
     assert "Stay close" in full
+    assert "FEEDBACK ALREADY GIVEN" in full
+    assert "open with where you are now" in full
+    assert "cheerful" in prompts.COACH_INSTRUCTIONS.lower()
+    assert "one short feedback" in prompts.COACH_INSTRUCTIONS.lower()
+    assert ui.FEEDBACK_LABEL == "Feedback"
     assert "Do not invent" in prompts.COACH_INSTRUCTIONS
     assert prompts.is_thin_transcript("um hello")
     assert not prompts.is_thin_transcript("I spent four years building hiring tools for clinics and teams")
@@ -320,6 +331,31 @@ def test_claude_requests_use_the_default_model(monkeypatch):
     assert coach.messages.kwargs["output_config"] == {"effort": "low"}
     assert "ANSWER SHAPE: career_story" in coach.messages.kwargs["messages"][0]["content"]
     assert "Do not invent" in coach.messages.kwargs["system"][0]["text"]
+    assert "cheerful" in coach.messages.kwargs["system"][0]["text"].lower()
+
+    repeated = (
+        "You sounded polite and clear that you want to understand the role, and that openness is credible. "
+        "You didn't actually answer who you are or the path that brought you here, so the interviewer still doesn't have a reason to stay with you. "
+        "Next time, open with your current work at Citi, one earlier example such as Basel capital at RBC, and one line on why that fits regulatory delivery. "
+        "Then invite their questions."
+    )
+    seen: list[str] = []
+    for index in range(25):
+        note = prompts.shape_feedback(
+            repeated,
+            question=f"Question {index}",
+            transcript=f"I would like to understand the role {index}",
+            prior_notes=seen,
+        )
+        assert note not in seen
+        lowered = note.lower()
+        assert "didn't actually" not in lowered
+        assert "no reason" not in lowered
+        assert "invite their questions" not in lowered
+        assert len(note.split()) <= 42
+        assert len(re.findall(r"[.!?]", note)) <= 2
+        seen.append(note)
+    assert "citi" in seen[0].lower()
 
 
 def test_claude_reads_document_images(monkeypatch):

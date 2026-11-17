@@ -15,6 +15,7 @@ from interview_app import auth, claude_client, config, db, files, mailer, prompt
 from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
+FEEDBACK_LABEL = "Feedback"
 _VIEW_PREFIXES = ("pending_answer_", "attempt_", "typed_")
 _DRAFT_FIELDS = (
     ("job_draft", "job_text", "job_description", "job_source"),
@@ -1519,7 +1520,7 @@ def render_summary(turns: list[db.TurnRecord]) -> None:
             st.caption(label)
             st.write(turn.model_answer)
         if turn.guidance and turn.guidance != "candidate-question":
-            st.caption("Keep this, then sharpen one thing")
+            st.caption(FEEDBACK_LABEL)
             st.write(turn.guidance)
         st.divider()
 
@@ -1775,10 +1776,12 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
     st.write(pending["transcript"] or "Nothing was captured.")
     try:
         with st.spinner("Shaping a stronger answer…"):
-            prior = [
-                (turn.question_text, turn.transcript)
-                for turn in db.list_turns(interview.id)
-                if turn.question_index < index
+            earlier = [turn for turn in db.list_turns(interview.id) if turn.question_index < index]
+            prior = [(turn.question_text, turn.transcript) for turn in earlier]
+            prior_feedback = [
+                turn.guidance
+                for turn in earlier
+                if turn.guidance and turn.guidance != "candidate-question"
             ]
             answer, guidance, bridge = claude_client.coach_answer(
                 job_description=interview.job_description,
@@ -1786,6 +1789,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                 question=question,
                 transcript=pending["transcript"],
                 prior=prior,
+                prior_feedback=prior_feedback,
                 cache_key=interview.id,
                 user_id=interview.user_id,
             )
@@ -1822,7 +1826,7 @@ def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int
         st.caption("This answer was typed.")
     st.markdown("**How an interviewer hopes to hear it**")
     st.write(turn.model_answer)
-    st.markdown("**Keep this, then sharpen one thing**")
+    st.markdown(f"**{FEEDBACK_LABEL}**")
     st.write(turn.guidance)
     left, right = st.columns(2)
     with left:

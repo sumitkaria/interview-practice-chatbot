@@ -158,13 +158,14 @@ def coach_answer(
     question: str,
     transcript: str,
     prior: list[tuple[str, str]] | None = None,
+    prior_feedback: list[str] | None = None,
     cache_key: str,
     client=None,
     user_id: str | None = None,
 ) -> tuple[str, str, str]:
     raw = complete(
         prompts.COACH_INSTRUCTIONS,
-        prompts.coach_input(job_description, resume_text, question, transcript, prior),
+        prompts.coach_input(job_description, resume_text, question, transcript, prior, prior_feedback),
         cache_key=cache_key,
         max_output_tokens=4000,
         client=client,
@@ -172,14 +173,26 @@ def coach_answer(
     )
     try:
         payload = prompts.parse_model_json(raw)
-        return prompts.coach_from_payload(payload, raw, transcript)
+        return prompts.coach_from_payload(
+            payload,
+            raw,
+            transcript,
+            question=question,
+            prior_notes=prior_feedback,
+        )
     except (ValueError, TypeError, json.JSONDecodeError):
         cleaned = raw.strip()
         if not cleaned:
             raise ClaudeError("The AI interviewer returned an empty answer. Try again.")
         if not cleaned.startswith("{") and not cleaned.startswith("```"):
             cleaned = prompts.polish_spoken_answer(cleaned)
-        return cleaned, "That already has a clear point. Next time, add the result in one sentence and tie it to this role.", ""
+        note = prompts.shape_feedback(
+            "",
+            question=question,
+            transcript=transcript,
+            prior_notes=prior_feedback,
+        )
+        return cleaned, note, ""
 
 
 def continue_small_talk(
