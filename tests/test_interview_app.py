@@ -384,6 +384,17 @@ def test_claude_requests_use_the_default_model(monkeypatch):
         seen.append(note)
     assert "citi" in seen[0].lower()
 
+    long_tip = prompts.shape_feedback(
+        "You were clear and specific. Next time, if a manager's comment comes to mind, open with that line "
+        "and then show how it changed the way you scope projects and plan the work with finance."
+    )
+    assert "if a manager's comment comes to mind." not in long_tip
+    assert long_tip.startswith("You were clear and specific.")
+    assert len(re.findall(r"[.!?]", long_tip)) == 2
+
+    assert not prompts.is_opening_question("What did a manager say about your work that changed how you plan?")
+    assert prompts.is_opening_question("Start by walking me through your last role.")
+
 
 def test_same_role_gets_a_new_question_set(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

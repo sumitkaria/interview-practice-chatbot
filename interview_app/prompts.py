@@ -529,22 +529,15 @@ def is_opening_question(question: str) -> bool:
     return _is_opener(question)
 
 
+_OPENER_RE = re.compile(
+    r"about yourself|\babout you\b|who you are|how you got|introduce|the work you do|ended up|proudest"
+    r"|walk(?:ing)? me through your (?:last role|current role|background|career|path|experience|resume)",
+    re.IGNORECASE,
+)
+
+
 def _is_opener(question: str) -> bool:
-    lowered = question.lower()
-    return any(
-        hint in lowered
-        for hint in (
-            "about yourself",
-            "about you",
-            "who you are",
-            "how you got",
-            "introduce",
-            "the work you do",
-            "ended up",
-            "proudest",
-            "know about you",
-        )
-    )
+    return bool(_OPENER_RE.search(question))
 
 
 def material_key(text: str) -> str:
@@ -1112,33 +1105,16 @@ def _unused(options: tuple[str, ...], used: set[str], question: str, transcript:
     return options[start]
 
 
-def _short_clause(sentence: str, limit: int) -> str:
-    cleaned = re.sub(r"\s+", " ", sentence).strip()
-    if len(cleaned.split()) <= limit:
-        return _finish_sentence(cleaned)
-    chunks = [part.strip() for part in cleaned.split(",") if part.strip()]
-    if len(chunks) >= 2 and len(chunks[0].split()) <= 3:
-        kept = ", ".join(chunks[:2])
-    elif chunks:
-        kept = chunks[0]
-    else:
-        kept = cleaned
-    if len(kept.split()) > limit:
-        kept = " ".join(kept.split()[:limit])
-    return _finish_sentence(kept)
-
-
 def _compose_feedback(text: str) -> tuple[str, str, str]:
+    # A sentence is kept whole or replaced from the bank; trimming one mid-clause loses the advice.
     sentences = [sentence for sentence in _sentences(text) if not _STRESS_RE.search(sentence)]
-    warm = [_short_clause(sentence, 22) for sentence in sentences if not _is_suggestion(sentence)]
-    tips = [_short_clause(sentence, 16) for sentence in sentences if _is_suggestion(sentence)]
+    warm = [_finish_sentence(item) for item in sentences if not _is_suggestion(item) and len(item.split()) <= 30]
+    tips = [_finish_sentence(item) for item in sentences if _is_suggestion(item) and len(item.split()) <= 30]
     opener = warm[0] if warm else ""
     tip = tips[0] if tips else ""
-    note = f"{opener} {tip}".strip()
-    words = note.split()
-    if len(words) > 42:
-        note = _finish_sentence(" ".join(words[:42]))
-    return note, opener, tip
+    if len(f"{opener} {tip}".split()) > 42:
+        opener = ""
+    return f"{opener} {tip}".strip(), opener, tip
 
 
 def _fresh_feedback(opener: str, tip: str, question: str, transcript: str, prior: list[str]) -> str:
@@ -1161,22 +1137,18 @@ def shape_feedback(
     """One brief, cheerful note that does not repeat feedback already given."""
     prior = [note.strip() for note in (prior_notes or []) if note and note.strip()]
     note, opener, tip = _compose_feedback(text)
-    if not note:
-        return _fresh_feedback("", "", question, transcript, prior)
-    if not prior:
+    if note and not prior:
         return note
-    opener_used = bool(opener) and any(opener and _norm_note(opener) == _opener_key(item) for item in prior)
-    tip_used = bool(tip) and any(tip and _norm_note(tip) == _tip_key(item) for item in prior)
-    close = any(_norm_note(note) == _norm_note(item) or _too_close(note, item) for item in prior)
-    if not opener_used and not tip_used and not close:
-        return note
-    return _fresh_feedback(
-        "" if opener_used or close else opener,
-        "" if tip_used or close else tip,
-        question,
-        transcript,
-        prior,
-    )
+    if note:
+        if any(_norm_note(note) == _norm_note(item) or _too_close(note, item) for item in prior):
+            opener = tip = ""
+        if opener and any(_norm_note(opener) == _opener_key(item) for item in prior):
+            opener = ""
+        if tip and any(_norm_note(tip) == _tip_key(item) for item in prior):
+            tip = ""
+    if opener and tip:
+        return f"{opener} {tip}"
+    return _fresh_feedback(opener, tip, question, transcript, prior)
 
 
 def coach_from_payload(
