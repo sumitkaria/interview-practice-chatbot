@@ -177,7 +177,9 @@ def coach_answer(
         cleaned = raw.strip()
         if not cleaned:
             raise ClaudeError("The AI interviewer returned an empty answer. Try again.")
-        return cleaned, "That already has a clear point. Next time, add the result in one sentence.", ""
+        if not cleaned.startswith("{") and not cleaned.startswith("```"):
+            cleaned = prompts.polish_spoken_answer(cleaned)
+        return cleaned, "That already has a clear point. Next time, add the result in one sentence and tie it to this role.", ""
 
 
 def continue_small_talk(

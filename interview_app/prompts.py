@@ -66,30 +66,42 @@ Sound like a person across a table. No numbering, no "as a hiring manager", and 
 """.strip()
 
 COACH_INSTRUCTIONS = """
-You write the answer a strong candidate would say out loud, then a note that builds confidence and repairs one weakness.
+You write the answer this candidate would give if they were calm, specific, and brief, then a note that keeps what worked and repairs one weakness.
 
-Interviewers listen for three things, in this order:
-- The point, in the first sentence.
-- One real example: the situation, what the candidate personally did, and the result.
-- One line on why that matters for this role.
+A hiring manager is deciding three things: can they do the work, will they do the work, and will they fit. The answer should make one of those obvious. It should sound like a person across a table in Canada, not like a worksheet, a LinkedIn post, or a coach reading headings.
 
-The answer should sound spoken. Use contractions. No headings, bullets, labels, brackets, or filler such as "leverage", "passionate", or "synergy".
-For a rating from 1 to 10, keep the number they chose and add one piece of proof. Do not raise their score.
-For a technical check such as SQL, give a simple correct answer they could say aloud.
-Use only facts from their background and from what they just said. Do not invent employers, titles, dates, metrics, or tools.
+The user message names an ANSWER SHAPE. Follow that shape, including its length. Do not announce the shape, and do not say Situation, Task, Action, Result, Skills, STAR, STARS, PREP, PPE, or SEAT out loud.
+
+How the answer should sound:
+- The first sentence is the point. No "great question", "absolutely", "of course", "so basically", or "I would say that".
+- Contractions and plain words. Mix a short sentence with a longer one. No headings, bullets, labels, or brackets.
+- Say "I" for what they did. Use "we" only for the shared setting, then say what their part was.
+- Spend the words on what they did and what changed. One sentence of setup is enough. If the setup runs long, cut it.
+- Use a number, percentage, or time saved only when that figure is in the background or in what they just said. Never invent an employer, title, date, metric, tool, product launch, award, headcount, or quote. A concrete result without a made-up percentage is the honest version.
+- Never speak badly of a past employer, manager, or coworker. Describe the work problem, not a person's character. Keep the tone forward-looking.
+- Do not use these phrases: leverage, passionate, synergy, think outside the box, hit the ground running, wear many hats, people person, perfectionist, go-getter, circle back, move the needle, at the end of the day, team player, dynamic, results-driven, I care too much.
+- Pick one episode from the background. Prefer a result they drove, a time they led, a disagreement they settled, a mistake they repaired, or a time they influenced someone who did not report to them. Do not reuse an episode already told in EARLIER ANSWERS unless this question cannot be answered without it.
+- Name something specific from the job description: a duty, a tool, a stakeholder, or the problem the seat exists to solve. If the organization is named and you know a stable public fact about what it does, you may use that fact. Do not invent news.
+- For a weakness, use a real work habit that would not sink this job, then the system they already use to manage it. Not a virtue in disguise.
+- For why they want the role, start from the organization's work or a problem in the job description, not from what they want for their own career.
+- For why they should be hired, name the hard part of the role, match two skills to it with proof, and you may close with one question about that work. The question is about the job, not about whether the interviewer liked the answer.
+
+If their words already answer the question, keep their meaning, examples, and claims. You may cut repetition, shorten the setup, and move the point to the first sentence. Do not add a fact they did not give you, and do not swap in a different story.
+If the recording is empty, off topic, or too thin, write an honest answer from the background. If the background has no fitting episode, say what they would do in this role based on the closest real work. Do not invent a scene.
 
 Return only a JSON object with the string keys "answer", "guidance", and "bridge".
 No markdown fences.
 
 answer:
-First person, 80 to 130 words.
-If their words already contain an answer, keep their meaning, examples, and claims, and shape them into what an interviewer hopes to hear.
-If the recording is empty, off topic, or too thin to be an answer, write a full genuine answer from the background.
+First person, spoken, at the length given in ANSWER SHAPE.
+No stage directions such as "(pause)".
 
 guidance:
-Second person, 40 to 80 words.
-Begin with what already sounded credible. Then name one weakness and how to say it better next time.
-If they did not really answer, say that kindly and explain how to handle this kind of question.
+Second person, 45 to 80 words.
+Name the kind of question in plain words, with no framework acronyms.
+Start with the specific line or fact that already worked. Then one fix: the result was missing, the setup was too long, they said "we" for their own action, they never tied it to this job, the weakness had no system, they criticized a person, or they listed several points instead of one.
+If they did not answer, say that plainly and give them the first sentence to open with next time.
+You may tell them to pause before that first sentence so it does not fill with "um" or "like".
 
 bridge:
 One spoken sentence the interviewer will say before her next question, and only when they gave a real answer.
@@ -456,6 +468,194 @@ def questions_input(job_description: str, resume_text: str, interviewer_name: st
     )
 
 
+_ANSWER_SHAPES = {
+    "career_story": (
+        "Career story, 150 to 190 words. Past trajectory in a sentence or two, then the present skills "
+        "that match this job description, one achievement with a result, and what they would take on in this seat. "
+        "Do not recap every job. Do not open with childhood or a slogan."
+    ),
+    "why_role": (
+        "Why this role, 90 to 140 words. Open from the organization's work or a specific problem in the job "
+        "description, not from what they want for their own career. Then the part of their background already aimed "
+        "at that problem, with one result, and what they would do in the seat."
+    ),
+    "why_hire": (
+        "Why hire them, 110 to 150 words. First the hard part of this role, in words from the job description. "
+        "Then two skills that meet that hard part, each with one proof from their background. "
+        "You may close with one short question about that same work. Do not ask if they liked the answer."
+    ),
+    "weakness": (
+        "A weakness, 70 to 110 words. A real work habit that would not cause this job to fail. "
+        "Not a joke, and not a virtue in disguise. Then the system they already use, and one sign it is working."
+    ),
+    "strength": (
+        "One strength this job needs, 80 to 120 words. Prove it with one example and a result. No list of adjectives."
+    ),
+    "salary": (
+        "Pay, 40 to 70 words. If they named a figure, keep it. If they did not, do not invent one. "
+        "Talk about the scope and say they would want the range for that scope. No apology and no joke."
+    ),
+    "mistake": (
+        "A mistake, 110 to 150 words. Own it in the first sentence. What they did next, the change in how they work, "
+        "and a later result of that change. No one else is at fault."
+    ),
+    "conflict": (
+        "A disagreement, 120 to 160 words. The issue, not the other person's character. What they said or did, "
+        "the outcome, and the working relationship afterward."
+    ),
+    "rating": (
+        "A rating, under 80 words. Keep the number they chose and do not raise it. One piece of proof, then the gap "
+        "they would close on the job if the number is short of the top. If they gave no number, do not invent one."
+    ),
+    "technical": (
+        "A practical check, under 120 words. A correct answer in plain spoken words. One example of how they have "
+        "used it if the background shows that. Do not lecture."
+    ),
+    "plan": (
+        "The early months, 80 to 120 words. One priority, why this job needs that first, and how they would know it "
+        "worked. If they were asked what they would learn, name one thing and why it changes how they would start. "
+        "Not a list."
+    ),
+    "direction": (
+        "Where the role goes, 70 to 110 words. A near-term path that serves this work, not a title they want for "
+        "themselves."
+    ),
+    "leaving": (
+        "Why they are looking, 60 to 100 words. Forward-looking, tied to this role. Nothing negative about a current "
+        "or past employer."
+    ),
+    "manager": (
+        "What they need from a manager, 70 to 110 words. One need, one time that helped the work, and how that would "
+        "look here. Not a list."
+    ),
+    "priorities": (
+        "Competing priorities, 80 to 120 words. State the rule they use, the reason, one week it mattered, then the "
+        "rule again in fresh words. One rule only."
+    ),
+    "remote": (
+        "Working apart, 70 to 110 words. One habit they use with people who are not beside them, one example, and "
+        "why that habit holds the work together."
+    ),
+    "feedback": (
+        "Feedback, 60 to 100 words. One way they want it, and one time they used it to change the work."
+    ),
+    "achievement": (
+        "A result, 120 to 160 words. Lead with the outcome, then one sentence of context, then what they personally "
+        "did. The outcome should be the kind of result this role is hired to produce."
+    ),
+    "closing": (
+        "One last point, 70 to 110 words. A piece of their background that matters for this role and is not already "
+        "in EARLIER ANSWERS. If the relevant stories are used, say the single point they most want remembered."
+    ),
+    "hypothetical": (
+        "What they would do, 100 to 140 words. The steps in this role, in order. Ground one step in work they have "
+        "already done if the background has it. Do not invent a past crisis."
+    ),
+    "behavioral": (
+        "One story, 120 to 170 words, about a minute and a half spoken. One sentence of context, one sentence on "
+        "what was theirs to do, then most of the words on the steps they took, in order. Close with what changed, "
+        "and one clause on the skill this job is hiring for. Use a number only if it is already in the materials."
+    ),
+    "open": (
+        "An open question, 70 to 110 words. Pause is for the person; the answer still picks one point. "
+        "State it, give one reason, one example from their background, then say the point again in fresh words and "
+        "tie it to this role. Do not turn it into a long story, and do not list several traits."
+    ),
+}
+
+
+def answer_shape(question: str) -> str:
+    """Pick the spoken structure for this interview question."""
+    q = re.sub(r"\s+", " ", (question or "").lower()).strip()
+    if not q:
+        return "open"
+    if re.search(r"\b(1\s*to\s*10|1-10|out of 10|on a scale|scale from|rate your)\b", q):
+        return "rating"
+    if re.search(r"\b(salary|compensation|pay expectation)\b", q) or "how much do you" in q:
+        return "salary"
+    if "about yourself" in q or "introduce yourself" in q or re.search(r"\babout you\b", q):
+        return "career_story"
+    if re.search(r"walk me through your (background|career|experience|r[eé]sum[eé])", q):
+        return "career_story"
+    if any(phrase in q for phrase in ("why are you leaving", "why did you leave", "why are you looking", "why you're looking")):
+        return "leaving"
+    if "why should" in q or "hire you" in q or "why you over" in q:
+        return "why_hire"
+    if any(
+        phrase in q
+        for phrase in (
+            "why this",
+            "why do you want",
+            "what drew",
+            "interested in",
+            "why our",
+            "why us",
+            "why the company",
+            "why the role",
+        )
+    ):
+        return "why_role"
+    if any(phrase in q for phrase in ("weakness", "stretch you", "development area", "struggle with", "not good at")):
+        return "weakness"
+    if any(phrase in q for phrase in ("mistake", "you failed", "a failure", "went wrong", "regret")):
+        return "mistake"
+    if any(phrase in q for phrase in ("disagre", "conflict", "push back", "pushed back")):
+        return "conflict"
+    if re.search(r"\b(six months|6 months|first month|90 days|ninety days|first 30|first six)\b", q) or any(
+        phrase in q for phrase in ("want finished", "have accomplished", "want to understand in your first")
+    ):
+        return "plan"
+    if any(phrase in q for phrase in ("take you", "five years", "next couple", "where do you want", "career goal")):
+        return "direction"
+    if any(phrase in q for phrase in ("from a manager", "your manager", "a good manager", "need from me")):
+        return "manager"
+    if "priorit" in q or "several things" in q:
+        return "priorities"
+    if any(phrase in q for phrase in ("remote", "hybrid", "on site", "onsite", "same place", "not in the same")):
+        return "remote"
+    if "feedback" in q:
+        return "feedback"
+    if any(phrase in q for phrase in ("practical", "how would you use", " sql", "query")) or q.startswith("sql"):
+        return "technical"
+    if any(phrase in q for phrase in ("strength", "strongest", "best at", "what are you good")):
+        return "strength"
+    if any(phrase in q for phrase in ("proud", "a result", "accomplishment")):
+        return "achievement"
+    if any(
+        phrase in q
+        for phrase in (
+            "make sure i understand",
+            "make sure you understand",
+            "anything about your experience",
+            "anything else about",
+            "before you close",
+            "before i close",
+            "before we close",
+        )
+    ):
+        return "closing"
+    if any(phrase in q for phrase in ("what would you do", "how would you handle", "how would you")):
+        return "hypothetical"
+    if any(
+        phrase in q
+        for phrase in (
+            "tell me about a time",
+            "describe a time",
+            "describe a situation",
+            "give me an example",
+            "give us an example",
+            "walk me through a",
+            "how have you",
+            "have you ever",
+            "ownership",
+            "influenc",
+            "deadline",
+        )
+    ):
+        return "behavioral"
+    return "open"
+
+
 def coach_input(
     job_description: str,
     resume_text: str,
@@ -468,15 +668,20 @@ def coach_input(
     if thin:
         check = (
             "The transcript is empty or too thin to convey an answer. "
-            "Write a full answer from the background and explain how to handle the question."
+            "Write a full honest answer from the background. Do not invent a scene."
         )
     else:
-        check = "The transcript conveys an answer. Stay close to what the candidate meant."
+        check = (
+            "The transcript conveys an answer. Stay close to what the candidate meant. "
+            "Do not replace their story with a shinier one."
+        )
     history = _format_prior(prior or [])
+    shape = answer_shape(question)
     return (
         f"JOB DESCRIPTION:\n{job_description.strip()}\n\n"
         f"CANDIDATE BACKGROUND:\n{resume_text.strip()}\n\n"
         f"INTERVIEW QUESTION:\n{question.strip()}\n\n"
+        f"ANSWER SHAPE: {shape}\n{_ANSWER_SHAPES[shape]}\n\n"
         f"WHAT THE CANDIDATE SAID OUT LOUD:\n{spoken or '[nothing captured]'}\n\n"
         f"TRANSCRIPT CHECK:\n{check}\n\n"
         f"EARLIER ANSWERS IN THIS SESSION:\n{history}\n"
@@ -493,18 +698,54 @@ def _format_prior(prior: list[tuple[str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
+_SILLY_OPENER = re.compile(
+    r"^(?:"
+    r"that(?:'s| is) a (?:great|good|excellent) question[.!]?\s*"
+    r"|great question[.!]?\s*"
+    r"|absolutely[.!,]\s*"
+    r"|of course[.!,]\s*"
+    r"|sure[.!,]\s*"
+    r"|so,?\s+basically,?\s*"
+    r"|i would say that\s+"
+    r")",
+    re.IGNORECASE,
+)
+
+_FRAME_LABEL = re.compile(
+    r"(?:^|(?<=[.!?]\s))(?:situation|task|action|result|skills|star|stars|prep|ppe|seat)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def polish_spoken_answer(answer: str) -> str:
+    """Drop worksheet labels and stock openings that make a spoken answer sound rehearsed."""
+    original = re.sub(r"\s+", " ", (answer or "")).strip()
+    text = original
+    if not text:
+        return ""
+    previous = None
+    while previous != text:
+        previous = text
+        text = _SILLY_OPENER.sub("", text).strip()
+    text = _FRAME_LABEL.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return original
+    return text
+
+
 def coach_from_payload(payload: Any, raw_text: str, transcript: str = "") -> tuple[str, str, str]:
     if not isinstance(payload, dict):
         raise ValueError("The model did not return an answer.")
-    answer = str(payload.get("answer") or "").strip()
+    answer = polish_spoken_answer(str(payload.get("answer") or ""))
     guidance = str(payload.get("guidance") or "").strip()
     bridge = re.sub(r"\s+", " ", str(payload.get("bridge") or "")).strip()
     if not answer:
-        answer = raw_text.strip()
+        answer = polish_spoken_answer(raw_text)
     if not answer:
         raise ValueError("The model returned an empty answer.")
     if not guidance:
-        guidance = "That already has a clear point. Next time, add the result in one sentence."
+        guidance = "That already has a clear point. Next time, add the result in one sentence and tie it to this role."
     if is_non_answer(transcript) or _is_reassurance(bridge):
         bridge = ""
     return answer, guidance, bridge[:240]
