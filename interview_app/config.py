@@ -183,8 +183,7 @@ def public_app_url() -> str:
 
 
 def contact_email() -> str:
-    value = (secret("CONTACT_EMAIL") or "sumitkaria11@gmail.com").strip()
-    return value or "sumitkaria11@gmail.com"
+    return (secret("CONTACT_EMAIL") or "").strip()
 
 
 def admin_emails() -> set[str]:
@@ -193,10 +192,7 @@ def admin_emails() -> set[str]:
 
 
 def is_admin(email: str) -> bool:
-    allowed = admin_emails()
-    if not allowed:
-        allowed = {contact_email().lower()}
-    return email.strip().lower() in allowed
+    return email.strip().lower() in admin_emails()
 
 
 def smtp_settings() -> dict[str, str | int] | None:

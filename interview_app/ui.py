@@ -529,7 +529,8 @@ def render_about() -> None:
 def render_contact(prefix: str) -> None:
     address = config.contact_email()
     with st.expander("Contact us"):
-        st.markdown(f"[{address}](mailto:{address})")
+        if address:
+            st.markdown(f"[{address}](mailto:{address})")
         with st.form(f"contact-{prefix}"):
             reply = st.text_input("Your email")
             message = st.text_area("Message", height=120)
@@ -542,14 +543,14 @@ def render_contact(prefix: str) -> None:
             return
         try:
             db.save_contact_message(reply, cleaned)
-            if mailer.configured():
+            if address and mailer.configured():
                 mailer.send_email(
                     address,
                     "Interview Practice message",
                     f"From: {reply.strip() or 'not given'}\n\n{cleaned}\n",
                 )
         except Exception:
-            st.error("The message could not be sent. Email us directly.")
+            st.error("The message could not be sent.")
             return
         st.success("Message sent. We'll reply by email.")
 
