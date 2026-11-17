@@ -195,6 +195,7 @@ def inject_css() -> None:
             align-items: stretch;
             gap: 0.5rem;
         }
+        .left-rail { display: none; }
         [data-testid="stColumn"]:has(.left-rail) {
             position: sticky;
             top: 0;
@@ -204,7 +205,16 @@ def inject_css() -> None:
             background: #E5EEE9;
             border: 1px solid #D3DDD7;
             border-radius: 18px;
-            padding: 0.85rem 0.85rem 1rem;
+            padding: 0 0.85rem 1rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) :is([data-testid="stElementContainer"], [data-testid="element-container"], .stElementContainer):has(.brand) {
+            position: sticky !important;
+            top: 0;
+            z-index: 30;
+            background: #E5EEE9;
+            margin-left: -0.85rem;
+            margin-right: -0.85rem;
+            padding: 0.85rem 0.85rem 0.55rem;
         }
         [data-testid="stColumn"]:has(.left-rail) [data-testid="stVerticalBlock"] {
             display: flex;
@@ -230,7 +240,7 @@ def inject_css() -> None:
             color: #F6F3EC;
             border-color: var(--forest);
         }
-        .brand { display: flex; gap: 0.75rem; align-items: center; margin: 0.2rem 0 1rem; }
+        .brand { display: flex; gap: 0.75rem; align-items: center; margin: 0 0 0.85rem; }
         .brand .mark { width: 42px; height: 42px; flex: none; }
         .brand-name { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); line-height: 1.15; }
         .brand-tag { color: var(--brass); font-size: 0.92rem; font-weight: 600; margin-top: 0.12rem; }
