@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 
 import httpx
 from openai import APIConnectionError, APIStatusError, AuthenticationError, OpenAI, RateLimitError
 
-from interview_app import config, prompts
+from interview_app import config, db, prompts
+
+_MODEL_SLOTS = threading.BoundedSemaphore(2)
 
 class GrokError(Exception):
     """A Grok request could not be completed."""
@@ -66,10 +69,25 @@ def response_text(response) -> str:
     raise GrokError("Grok returned an empty response. Try again.")
 
 
-def complete(instructions: str, user_content, *, cache_key: str, max_output_tokens: int, client=None) -> str:
+def complete(
+    instructions: str,
+    user_content,
+    *,
+    cache_key: str,
+    max_output_tokens: int,
+    client=None,
+    user_id: str | None = None,
+) -> str:
     api_key = require_api_key()
+    if not _MODEL_SLOTS.acquire(timeout=8):
+        raise GrokError("The interviewer is with someone else right now. Wait a moment and try again.")
     grok = client or build_client(api_key)
     try:
+        if user_id:
+            try:
+                db.charge_model_call(user_id)
+            except db.QuotaExceeded as exc:
+                raise GrokError(str(exc)) from exc
         response = grok.responses.create(
             model=config.grok_model(),
             reasoning={"effort": config.grok_effort()},
@@ -82,30 +100,48 @@ def complete(instructions: str, user_content, *, cache_key: str, max_output_toke
             ],
         )
     except AuthenticationError as exc:
+        _remember_model_error(user_id, "The Grok API key was rejected.")
         raise GrokError(
             "The Grok API key was rejected. Check XAI_API_KEY in Streamlit secrets."
         ) from exc
     except RateLimitError as exc:
+        _remember_model_error(user_id, "Grok is rate limited or out of credits.")
         raise GrokError(
             "Grok is rate limited, or the account needs more credits. "
             "Check the balance at https://console.x.ai/."
         ) from exc
     except APIStatusError as exc:
+        _remember_model_error(user_id, f"Grok returned {exc.status_code}.")
         if exc.status_code in {402, 403}:
             raise GrokError(
                 "Grok refused the request. Check that the API key is valid and the account has credits."
             ) from exc
         raise GrokError(f"Grok returned an error ({exc.status_code}). {_sanitize(exc, api_key)}") from exc
     except APIConnectionError as exc:
+        _remember_model_error(user_id, "Could not reach the Grok API.")
         raise GrokError("Could not reach the Grok API. Check the network and try again.") from exc
     except GrokError:
         raise
     except Exception as exc:
+        _remember_model_error(user_id, _sanitize(exc, api_key))
         raise GrokError(f"Grok could not complete that request. {_sanitize(exc, api_key)}") from exc
+    finally:
+        _MODEL_SLOTS.release()
     return response_text(response)
 
 
-def generate_questions(job_description: str, resume_text: str, *, cache_key: str, client=None) -> prompts.InterviewScript:
+def _remember_model_error(user_id: str | None, message: str) -> None:
+    db.record_event(user_id, "error", message)
+
+
+def generate_questions(
+    job_description: str,
+    resume_text: str,
+    *,
+    cache_key: str,
+    client=None,
+    user_id: str | None = None,
+) -> prompts.InterviewScript:
     interviewer_name = prompts.choose_interviewer_name()
     raw = complete(
         prompts.QUESTION_INSTRUCTIONS,
@@ -113,6 +149,7 @@ def generate_questions(job_description: str, resume_text: str, *, cache_key: str
         cache_key=cache_key,
         max_output_tokens=8000,
         client=client,
+        user_id=user_id,
     )
     try:
         return prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name)
@@ -129,6 +166,7 @@ def coach_answer(
     prior: list[tuple[str, str]] | None = None,
     cache_key: str,
     client=None,
+    user_id: str | None = None,
 ) -> tuple[str, str, str]:
     raw = complete(
         prompts.COACH_INSTRUCTIONS,
@@ -136,6 +174,7 @@ def coach_answer(
         cache_key=cache_key,
         max_output_tokens=4000,
         client=client,
+        user_id=user_id,
     )
     try:
         payload = prompts.parse_model_json(raw)
@@ -152,6 +191,7 @@ def continue_small_talk(
     history: list[tuple[str, str]],
     cache_key: str,
     client=None,
+    user_id: str | None = None,
 ) -> str:
     lines = []
     for speaker, text in history[-4:]:
@@ -163,6 +203,7 @@ def continue_small_talk(
         cache_key=cache_key,
         max_output_tokens=200,
         client=client,
+        user_id=user_id,
     )
     try:
         payload = prompts.parse_model_json(raw)
@@ -181,6 +222,7 @@ def answer_candidate_question(
     interviewer_title: str,
     cache_key: str,
     client=None,
+    user_id: str | None = None,
 ) -> str:
     raw = complete(
         prompts.INTERVIEWER_REPLY_INSTRUCTIONS,
@@ -193,6 +235,7 @@ def answer_candidate_question(
         cache_key=cache_key,
         max_output_tokens=2000,
         client=client,
+        user_id=user_id,
     )
     try:
         payload = prompts.parse_model_json(raw)
@@ -209,7 +252,14 @@ def answer_candidate_question(
     return reply
 
 
-def extract_document_text(data: bytes, mime: str, *, cache_key: str, client=None) -> str:
+def extract_document_text(
+    data: bytes,
+    mime: str,
+    *,
+    cache_key: str,
+    client=None,
+    user_id: str | None = None,
+) -> str:
     encoded = base64.b64encode(data).decode("ascii")
     content = [
         {
@@ -225,6 +275,7 @@ def extract_document_text(data: bytes, mime: str, *, cache_key: str, client=None
         cache_key=cache_key,
         max_output_tokens=4000,
         client=client,
+        user_id=user_id,
     )
     cleaned = text.strip()
     if not cleaned:
