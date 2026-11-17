@@ -386,3 +386,81 @@ def test_voice_and_session_components_exist():
     assert "maxSeconds" in voice
     assert "ip_session" in session
     assert "sessionStorage" in session
+
+
+def test_contact_mailer_builds_and_sends(monkeypatch):
+    from interview_app import mailer
+
+    monkeypatch.setenv("CONTACT_SMTP_USER", "sumitfrm@gmail.com")
+    monkeypatch.setenv("CONTACT_SMTP_PASSWORD", "app-password-here")
+    monkeypatch.setenv("CONTACT_TO_EMAIL", "sumitfrm@gmail.com")
+    assert mailer.smtp_configured()
+
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, context=None, timeout=None):
+            sent["host"] = host
+            sent["port"] = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def login(self, user, password):
+            sent["login"] = (user, password)
+
+        def send_message(self, message):
+            sent["message"] = message
+
+    monkeypatch.setattr(mailer.smtplib, "SMTP_SSL", FakeSMTP)
+    mailer.send_contact_message(
+        name="Alex",
+        reply_email="alex@example.com",
+        subject="Mic issue",
+        message="The microphone check never finishes.",
+    )
+    assert sent["host"] == "smtp.gmail.com"
+    assert sent["port"] == 465
+    assert sent["login"] == ("sumitfrm@gmail.com", "app-password-here")
+    message = sent["message"]
+    assert message["To"] == "sumitfrm@gmail.com"
+    assert message["Reply-To"] == "alex@example.com"
+    assert "Mic issue" in message["Subject"]
+    body = message.get_content()
+    assert "Alex" in body
+    assert "The microphone check never finishes." in body
+
+
+def test_contact_mailer_requires_secrets_and_message(monkeypatch):
+    from interview_app import mailer
+
+    monkeypatch.delenv("CONTACT_SMTP_USER", raising=False)
+    monkeypatch.delenv("CONTACT_SMTP_PASSWORD", raising=False)
+    assert not mailer.smtp_configured()
+    with pytest.raises(mailer.MailError, match="not set up"):
+        mailer.send_contact_message(
+            name="Alex",
+            reply_email="alex@example.com",
+            subject="Help",
+            message="Something broke.",
+        )
+
+    monkeypatch.setenv("CONTACT_SMTP_USER", "sumitfrm@gmail.com")
+    monkeypatch.setenv("CONTACT_SMTP_PASSWORD", "app-password-here")
+    with pytest.raises(mailer.MailError, match="describe your concern"):
+        mailer.send_contact_message(
+            name="Alex",
+            reply_email="alex@example.com",
+            subject="Help",
+            message="   ",
+        )
+
+
+def test_contact_to_email_defaults(monkeypatch):
+    monkeypatch.delenv("CONTACT_TO_EMAIL", raising=False)
+    assert config.contact_to_email() == "sumitfrm@gmail.com"
+    monkeypatch.setenv("CONTACT_TO_EMAIL", "other@example.com")
+    assert config.contact_to_email() == "other@example.com"

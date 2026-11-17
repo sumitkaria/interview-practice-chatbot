@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from interview_app import auth, config, db, files, grok_client, prompts
+from interview_app import auth, config, db, files, grok_client, mailer, prompts
 from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
@@ -32,6 +32,12 @@ _VIEW_KEYS = {
     "resume_upload_sig_error",
     "confirm_restart",
     "just_saved",
+    "app_view",
+    "contact_sent",
+    "contact_name",
+    "contact_email",
+    "contact_subject",
+    "contact_message",
 }
 
 
@@ -373,6 +379,16 @@ def request_logout() -> None:
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
     st.caption("Your résumé and the role stay with your account.")
+    mode = st.radio(
+        "Account",
+        ["Log in", "Create account", "Contact us"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if mode == "Contact us":
+        render_contact_form()
+        return
+
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
             try:
@@ -383,12 +399,6 @@ def render_login() -> None:
     else:
         st.caption("Google sign-in is not set up yet. Create an account with email and password.")
 
-    mode = st.radio(
-        "Account",
-        ["Log in", "Create account"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
     with st.form("credentials"):
         name = st.text_input("Name") if mode == "Create account" else ""
         email = st.text_input("Email")
@@ -418,6 +428,45 @@ def render_login() -> None:
     st.rerun()
 
 
+def render_contact_form(user: db.UserRecord | None = None) -> None:
+    st.title("Contact us")
+    st.write("Share a concern or question. It is emailed to the Interview Practice team.")
+    if not mailer.smtp_configured():
+        st.warning(
+            "Contact email is not configured yet. Add CONTACT_SMTP_USER and CONTACT_SMTP_PASSWORD "
+            "(a Gmail App Password) in Streamlit secrets."
+        )
+    if st.session_state.pop("contact_sent", False):
+        st.success("Thanks — your message was sent.")
+    if "contact_name" not in st.session_state:
+        st.session_state.contact_name = (user.name if user else "") or ""
+    if "contact_email" not in st.session_state:
+        st.session_state.contact_email = (user.email if user else "") or ""
+    with st.form("contact"):
+        name = st.text_input("Name", key="contact_name")
+        email = st.text_input("Email", key="contact_email")
+        subject = st.text_input("Subject", key="contact_subject")
+        message = st.text_area("Your concern", height=160, key="contact_message")
+        submitted = st.form_submit_button("Send message", type="primary", use_container_width=True)
+    if not submitted:
+        return
+    if not auth.valid_email(email.strip().lower()):
+        st.error("Please enter a valid email address.")
+        return
+    try:
+        mailer.send_contact_message(
+            name=name,
+            reply_email=email.strip().lower(),
+            subject=subject,
+            message=message,
+        )
+    except mailer.MailError as exc:
+        st.error(str(exc))
+        return
+    st.session_state.contact_sent = True
+    st.rerun()
+
+
 def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
     ensure_drafts(user, profile)
@@ -426,6 +475,9 @@ def render_app(user: db.UserRecord) -> None:
         st.markdown('<div class="left-rail"></div>', unsafe_allow_html=True)
         render_sidebar(user, profile)
     with stage:
+        if st.session_state.get("app_view") == "contact":
+            render_contact_form(user)
+            return
         if st.session_state.pop("just_saved", False):
             st.success("Saved. It will be here the next time you sign in.")
         profile = persist_complete_drafts(user.id, profile)
@@ -584,6 +636,11 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
     )
+    viewing_contact = st.session_state.get("app_view") == "contact"
+    contact_label = "Back to practice" if viewing_contact else "Contact us"
+    if st.button(contact_label, use_container_width=True, key="toggle_contact"):
+        st.session_state.app_view = None if viewing_contact else "contact"
+        st.rerun()
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()

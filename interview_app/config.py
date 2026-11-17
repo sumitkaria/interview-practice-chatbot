@@ -195,3 +195,22 @@ def google_auth_configured() -> bool:
         return all(bool(auth.get(key)) for key in required)
     except Exception:
         return False
+
+
+DEFAULT_CONTACT_TO = "sumitfrm@gmail.com"
+
+
+def contact_smtp_user() -> str | None:
+    value = secret("CONTACT_SMTP_USER")
+    return value.strip() if value else None
+
+
+def contact_smtp_password() -> str | None:
+    value = secret("CONTACT_SMTP_PASSWORD")
+    return value.strip() if value else None
+
+
+def contact_to_email() -> str:
+    value = secret("CONTACT_TO_EMAIL", DEFAULT_CONTACT_TO) or DEFAULT_CONTACT_TO
+    cleaned = value.strip()
+    return cleaned or DEFAULT_CONTACT_TO
