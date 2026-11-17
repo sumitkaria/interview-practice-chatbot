@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from interview_app import auth, config, db, files, grok_client, mailer, prompts
+from interview_app import auth, claude_client, config, db, files, mailer, prompts
 from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
@@ -266,6 +266,18 @@ def inject_css() -> None:
             letter-spacing: 0.04em;
             text-transform: uppercase;
             margin: 0.2rem 0 0.45rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stSelectbox"] label {
+            color: var(--forest);
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-baseweb="select"] > div {
+            background: #FFFcf7;
+            border-color: #C9D5CF;
+            border-radius: 10px;
         }
         .studio {
             background: var(--card);
@@ -816,6 +828,7 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
     note = st.session_state.get("storage_note")
     if note:
         st.caption(note)
+    render_model_settings(user)
     render_account(user)
     render_contact(f"sidebar-{user.id}")
     render_change_password(user)
@@ -915,6 +928,46 @@ def render_change_password(user: db.UserRecord) -> None:
         st.rerun()
 
 
+def render_model_settings(user: db.UserRecord) -> None:
+    model, effort = db.model_settings(user.id)
+    models = config.model_options()
+    efforts = config.effort_options()
+    model_labels = dict(models)
+    effort_labels = dict(efforts)
+    model_key = f"claude_model_{user.id}"
+    effort_key = f"claude_effort_{user.id}"
+    if model_key not in st.session_state or st.session_state[model_key] not in model_labels:
+        st.session_state[model_key] = model
+    if effort_key not in st.session_state or st.session_state[effort_key] not in effort_labels:
+        st.session_state[effort_key] = effort
+    st.markdown("<div class='file-label'>Interviewer</div>", unsafe_allow_html=True)
+    st.selectbox(
+        "Model",
+        options=[item[0] for item in models],
+        format_func=lambda value: model_labels.get(value, value),
+        key=model_key,
+        on_change=_save_model_settings,
+        args=(user.id,),
+    )
+    st.selectbox(
+        "Thinking",
+        options=[item[0] for item in efforts],
+        format_func=lambda value: effort_labels.get(value, value),
+        key=effort_key,
+        on_change=_save_model_settings,
+        args=(user.id,),
+        help="Low answers sooner. Max thinks longer before it replies.",
+    )
+
+
+def _save_model_settings(user_id: str) -> None:
+    db.save_model_settings(
+        user_id,
+        str(st.session_state.get(f"claude_model_{user_id}") or ""),
+        str(st.session_state.get(f"claude_effort_{user_id}") or ""),
+    )
+
+
 def render_account(user: db.UserRecord) -> None:
     if st.session_state.pop("password_updated", False):
         st.success("Password updated. Other sessions were signed out.")
@@ -965,7 +1018,7 @@ def render_account(user: db.UserRecord) -> None:
 
 def image_reader_for(user_id: str):
     def read(data: bytes, mime: str) -> str:
-        return grok_client.extract_document_text(data, mime, cache_key=user_id, user_id=user_id)
+        return claude_client.extract_document_text(data, mime, cache_key=user_id, user_id=user_id)
 
     return read
 
@@ -1258,8 +1311,8 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
         "She introduces herself, then asks about the work, including situations, "
         "remote or hybrid work, and pay. At the end you can ask her questions."
     )
-    if not config.xai_api_key():
-        st.error(str(grok_client.GrokNotConfigured()))
+    if not config.anthropic_api_key():
+        st.error(str(claude_client.ClaudeNotConfigured()))
         return
     used, limit, _calls, _call_limit = db.usage_today(user.id)
     if used >= limit:
@@ -1268,7 +1321,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     if st.button("Begin interview", type="primary"):
         try:
             with st.spinner("Preparing your interviewer…"):
-                script = grok_client.generate_questions(
+                script = claude_client.generate_questions(
                     profile.job_description,
                     profile.resume_text,
                     cache_key=user.id,
@@ -1293,7 +1346,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
         except db.QuotaExceeded as exc:
             st.error(str(exc))
             return
-        except grok_client.GrokError as exc:
+        except claude_client.ClaudeError as exc:
             st.error(str(exc))
             return
         st.rerun()
@@ -1451,12 +1504,12 @@ def render_small_talk(interview: db.InterviewRecord) -> None:
     else:
         history.append(("you", "[said nothing]"))
     try:
-        reply = grok_client.continue_small_talk(
+        reply = claude_client.continue_small_talk(
             history=history,
             cache_key=interview.id,
             user_id=interview.user_id,
         )
-    except grok_client.GrokError:
+    except claude_client.ClaudeError:
         reply = "Glad to hear it."
     db.append_chat(interview.id, "interviewer", reply, wrap=True)
     st.session_state.pop(pending_key, None)
@@ -1571,7 +1624,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                 for turn in db.list_turns(interview.id)
                 if turn.question_index < index
             ]
-            answer, guidance, bridge = grok_client.coach_answer(
+            answer, guidance, bridge = claude_client.coach_answer(
                 job_description=interview.job_description,
                 resume_text=interview.resume_text,
                 question=question,
@@ -1591,7 +1644,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
         )
         if bridge and index + 1 < len(interview.questions):
             db.set_bridge(interview.id, index + 1, bridge)
-    except grok_client.GrokError as exc:
+    except claude_client.ClaudeError as exc:
         st.error(str(exc))
         if st.button("Try again"):
             st.rerun()
@@ -1709,7 +1762,7 @@ def capture_candidate_question(interview: db.InterviewRecord, index: int, prompt
         return
     try:
         with st.spinner("She is answering…"):
-            reply = grok_client.answer_candidate_question(
+            reply = claude_client.answer_candidate_question(
                 job_description=interview.job_description,
                 resume_text=interview.resume_text,
                 question=pending["transcript"],
@@ -1727,7 +1780,7 @@ def capture_candidate_question(interview: db.InterviewRecord, index: int, prompt
             "candidate-question",
             pending.get("reason") or "",
         )
-    except grok_client.GrokError as exc:
+    except claude_client.ClaudeError as exc:
         st.error(str(exc))
         if st.button("Try again", key=f"retry_ask_{interview.id}_{index}"):
             st.rerun()

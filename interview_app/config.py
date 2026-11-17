@@ -11,10 +11,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL = "grok-4.7"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "low"
-ALLOWED_EFFORTS = {"low", "medium", "high", "xhigh"}
-XAI_BASE_URL = "https://api.x.ai/v1"
+MODEL_CHOICES = (
+    ("claude-haiku-5-5", "Haiku 5.5 — fastest"),
+    ("claude-sonnet-5-5", "Sonnet 5.5"),
+    ("claude-opus-5-5", "Opus 5.5 — most thorough"),
+)
+EFFORT_CHOICES = (
+    ("low", "Low — quick"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("xhigh", "Extra high"),
+    ("max", "Max — slowest"),
+)
+ALLOWED_EFFORTS = {item[0] for item in EFFORT_CHOICES}
 
 
 def secret(name: str, default: str | None = None) -> str | None:
@@ -33,21 +44,33 @@ def secret(name: str, default: str | None = None) -> str | None:
     return default
 
 
-def xai_api_key() -> str | None:
-    key = secret("XAI_API_KEY")
+def anthropic_api_key() -> str | None:
+    key = secret("ANTHROPIC_API_KEY")
     return key.strip() if key else None
 
 
-def grok_model() -> str:
-    model = secret("GROK_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+def claude_model() -> str:
+    model = secret("CLAUDE_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
     return model.strip() or DEFAULT_MODEL
 
 
-def grok_effort() -> str:
-    effort = (secret("GROK_REASONING_EFFORT", DEFAULT_EFFORT) or DEFAULT_EFFORT).strip().lower()
+def claude_effort() -> str:
+    effort = (secret("CLAUDE_EFFORT", DEFAULT_EFFORT) or DEFAULT_EFFORT).strip().lower()
     if effort not in ALLOWED_EFFORTS:
         return DEFAULT_EFFORT
     return effort
+
+
+def model_options() -> tuple[tuple[str, str], ...]:
+    options = list(MODEL_CHOICES)
+    configured = claude_model()
+    if configured not in {item[0] for item in options}:
+        options.append((configured, configured))
+    return tuple(options)
+
+
+def effort_options() -> tuple[tuple[str, str], ...]:
+    return EFFORT_CHOICES
 
 
 def data_dir() -> Path:

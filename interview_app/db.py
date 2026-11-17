@@ -60,6 +60,8 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claude_model: Mapped[str] = mapped_column(String(80), default="")
+    claude_effort: Mapped[str] = mapped_column(String(20), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -454,6 +456,42 @@ def upsert_google_user(email: str, name: str, google_sub: str) -> UserRecord:
         return _user(row)
 
 
+def model_settings(user_id: str) -> tuple[str, str]:
+    from interview_app import config
+
+    stored_model = ""
+    stored_effort = ""
+    with session_scope() as session:
+        row = session.get(User, user_id)
+        if row is not None:
+            stored_model = (row.claude_model or "").strip()
+            stored_effort = (row.claude_effort or "").strip().lower()
+    allowed = {item[0] for item in config.model_options()}
+    model = stored_model if stored_model in allowed else config.claude_model()
+    effort = stored_effort if stored_effort in config.ALLOWED_EFFORTS else config.claude_effort()
+    return model, effort
+
+
+def save_model_settings(user_id: str, model: str, effort: str) -> tuple[str, str]:
+    from interview_app import config
+
+    allowed = {item[0] for item in config.model_options()}
+    cleaned_model = model.strip()
+    if cleaned_model not in allowed:
+        cleaned_model = config.claude_model()
+    cleaned_effort = effort.strip().lower()
+    if cleaned_effort not in config.ALLOWED_EFFORTS:
+        cleaned_effort = config.claude_effort()
+    with session_scope() as session:
+        row = session.get(User, user_id)
+        if row is None:
+            return cleaned_model, cleaned_effort
+        row.claude_model = cleaned_model[:80]
+        row.claude_effort = cleaned_effort[:20]
+        row.updated_at = utcnow()
+    return cleaned_model, cleaned_effort
+
+
 def get_profile(user_id: str) -> ProfileRecord | None:
     with session_scope() as session:
         row = session.get(Profile, user_id)
@@ -818,7 +856,11 @@ def _migrate(engine) -> None:
     dialect = engine.dialect.name
     timestamp = "TIMESTAMP" if dialect == "sqlite" else "TIMESTAMP WITH TIME ZONE"
     additions = {
-        "users": [("email_verified_at", timestamp)],
+        "users": [
+            ("email_verified_at", timestamp),
+            ("claude_model", "VARCHAR(80) DEFAULT ''"),
+            ("claude_effort", "VARCHAR(20) DEFAULT ''"),
+        ],
         "profiles": [
             ("job_file_id", "VARCHAR(36) DEFAULT ''"),
             ("resume_file_id", "VARCHAR(36) DEFAULT ''"),
@@ -1176,6 +1218,8 @@ def export_account(user_id: str) -> dict:
                 "email": user.email,
                 "name": user.name,
                 "created_at": user.created_at.isoformat() if user.created_at else "",
+                "claude_model": user.claude_model or "",
+                "claude_effort": user.claude_effort or "",
             },
             "profile": {
                 "job_description": profile.job_description if profile else "",

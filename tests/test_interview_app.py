@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from interview_app import auth, config, db, files, grok_client, mailer, prompts, ui
+from interview_app import auth, claude_client, config, db, files, mailer, prompts, ui
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,7 +21,7 @@ def fresh_database(tmp_path):
     db.set_actor(None)
 
 
-class FakeResponses:
+class FakeMessages:
     def __init__(self, text: str):
         self.text = text
         self.kwargs = None
@@ -31,14 +31,20 @@ class FakeResponses:
         return SimpleResponse(self.text)
 
 
+class SimpleBlock:
+    def __init__(self, text: str):
+        self.type = "text"
+        self.text = text
+
+
 class SimpleResponse:
     def __init__(self, text: str):
-        self.output_text = text
+        self.content = [SimpleBlock(text)]
 
 
 class FakeClient:
     def __init__(self, text: str):
-        self.responses = FakeResponses(text)
+        self.messages = FakeMessages(text)
 
 
 class Upload:
@@ -235,22 +241,24 @@ def test_normalize_questions_and_coach_prompt():
     assert not prompts.is_thin_transcript("I spent four years building hiring tools for clinics and teams")
 
 
-def test_grok_requests_use_the_flagship_model(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "test-key")
-    monkeypatch.delenv("GROK_MODEL", raising=False)
-    monkeypatch.delenv("GROK_REASONING_EFFORT", raising=False)
+def test_claude_requests_use_the_default_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
     client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"]}')
-    script = grok_client.generate_questions("job", "resume", cache_key="user-1", client=client)
+    script = claude_client.generate_questions("job", "resume", cache_key="user-1", client=client)
     assert script.questions[0] == "Tell me about yourself."
     assert script.interviewer_name in prompts.INTERVIEWER_NAMES
-    sent = client.responses.kwargs
-    assert sent["model"] == "grok-4.7"
-    assert sent["reasoning"] == {"effort": "low"}
-    assert sent["store"] is False
-    assert sent["prompt_cache_key"] == "user-1"
+    sent = client.messages.kwargs
+    assert sent["model"] == "claude-sonnet-5-5"
+    assert sent["max_tokens"] == 8000
+    assert sent["output_config"] == {"effort": "low"}
+    assert sent["metadata"] == {"user_id": "user-1"}
+    assert sent["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sent["messages"][0]["role"] == "user"
 
     coach = FakeClient('Sure. {"answer": "I built the hiring workflow.", "guidance": "Lead with the result."}')
-    answer, guidance, bridge = grok_client.coach_answer(
+    answer, guidance, bridge = claude_client.coach_answer(
         job_description="job",
         resume_text="resume",
         question="Tell me about yourself.",
@@ -263,10 +271,48 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     assert bridge == ""
 
 
-def test_missing_grok_key(monkeypatch):
+def test_claude_reads_document_images(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = FakeClient("Acme Corp\nSoftware Engineer")
+    text = claude_client.extract_document_text(b"png-bytes", "image/png", cache_key="user-1", client=client)
+    assert text == "Acme Corp\nSoftware Engineer"
+    content = client.messages.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image"
+    assert content[0]["source"]["media_type"] == "image/png"
+    assert content[0]["source"]["data"] == "cG5nLWJ5dGVz"
+    assert content[1]["type"] == "text"
+
+
+def test_account_can_choose_model_and_effort(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
+    user = auth.register_user("Sumit", "model@example.com", "correct horse")
+    assert db.model_settings(user.id) == ("claude-sonnet-5-5", "low")
+    assert [item[0] for item in config.model_options()] == [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+    ]
+    assert [item[0] for item in config.effort_options()] == ["low", "medium", "high", "xhigh", "max"]
+
+    db.save_model_settings(user.id, "claude-opus-5-5", "high")
+    client = FakeClient('{"questions": ["What did you ship?"]}')
+    claude_client.generate_questions("job", "resume", cache_key=user.id, client=client, user_id=user.id)
+    assert client.messages.kwargs["model"] == "claude-opus-5-5"
+    assert client.messages.kwargs["output_config"] == {"effort": "high"}
+
+    db.save_model_settings(user.id, "not-a-model", "nope")
+    assert db.model_settings(user.id) == ("claude-sonnet-5-5", "low")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-custom")
+    assert "claude-custom" in {item[0] for item in config.model_options()}
+
+
+def test_missing_claude_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    with pytest.raises(grok_client.GrokNotConfigured):
-        grok_client.generate_questions("job", "resume", cache_key="user")
+    with pytest.raises(claude_client.ClaudeNotConfigured):
+        claude_client.generate_questions("job", "resume", cache_key="user")
 
 
 def test_database_url_normalization():
