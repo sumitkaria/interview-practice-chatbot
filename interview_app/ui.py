@@ -1238,7 +1238,7 @@ def render_session_files(user_id: str, interview: db.InterviewRecord) -> None:
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     st.subheader("A conversation, not a quiz")
     st.write("You have 3 minutes for each answer. You can speak, or type.")
-    st.write("First you'll check the microphone, then she'll ask how your day is going.")
+    st.write("First you'll check the microphone, then she'll start with a little small talk.")
     st.write("She starts with a short picture of the role, then the questions.")
     st.write(
         "She introduces herself, then asks about the work, including situations, "
@@ -1257,8 +1257,9 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 script = grok_client.generate_questions(
                     profile.job_description,
                     profile.resume_text,
-                    cache_key=user.id,
+                    cache_key=f"{user.id}:{secrets.token_hex(4)}",
                     user_id=user.id,
+                    avoid=db.questions_for_role(user.id, profile.job_description),
                 )
             created = db.create_interview(
                 user.id,
@@ -1274,6 +1275,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 role_brief=script.role_brief,
                 job_file_id=profile.job_file_id,
                 resume_file_id=profile.resume_file_id,
+                small_talk=script.small_talk,
             )
             st.session_state.selected_interview_id = created.id
         except db.QuotaExceeded as exc:
@@ -1396,7 +1398,8 @@ def render_mic_check(interview: db.InterviewRecord) -> None:
 
 def render_small_talk(interview: db.InterviewRecord) -> None:
     if not interview.chat_log:
-        db.start_small_talk(interview.id, prompts.SMALL_TALK_OPENER)
+        opener = interview.small_talk if prompts.acceptable_small_talk(interview.small_talk) else prompts.fresh_small_talk()
+        db.start_small_talk(interview.id, opener)
         st.rerun()
     name = interview.interviewer_name or "She"
     for speaker, text in interview.chat_log:
@@ -1544,10 +1547,6 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                 st.rerun()
         return
 
-    if prompts.is_non_answer(pending["transcript"]) and index < len(interview.questions):
-        move_past_silence(interview, index, question, pending)
-        return
-
     st.markdown("**What you said**")
     st.write(pending["transcript"] or "Nothing was captured.")
     try:
@@ -1591,16 +1590,21 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
 def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int, total: int) -> None:
     st.markdown("**What you said**")
     st.write(turn.transcript or "Nothing was captured.")
-    if turn.stop_reason == "time":
+    if prompts.is_non_answer(turn.transcript):
+        st.caption("You can take this one again whenever you want. Here's a way through it.")
+    elif turn.stop_reason == "time":
         st.caption("Recording stopped at 3 minutes.")
     elif turn.stop_reason == "silence":
         st.caption("Recording stopped after a pause.")
     elif turn.stop_reason == "typed":
         st.caption("This answer was typed.")
     st.markdown("**How an interviewer hopes to hear it**")
-    st.write(turn.model_answer)
+    st.write(
+        " ".join((turn.model_answer or "").split())
+        or "Start with the point in one sentence, then one example of what you did and how it turned out."
+    )
     st.markdown("**Keep this, then sharpen one thing**")
-    st.write(turn.guidance)
+    st.write(prompts.feedback_text(turn.transcript, turn.guidance))
     left, right = st.columns(2)
     with left:
         if st.button("Answer again"):
@@ -1614,21 +1618,6 @@ def show_feedback(interview: db.InterviewRecord, turn: db.TurnRecord, index: int
         elif st.button("Your questions", type="primary"):
             db.set_current_index(interview.id, total)
             st.rerun()
-
-
-def move_past_silence(interview: db.InterviewRecord, index: int, question: str, pending: dict) -> None:
-    db.save_turn(
-        interview.id,
-        index,
-        question,
-        (pending.get("transcript") or "").strip(),
-        "",
-        "",
-        pending.get("reason") or "",
-    )
-    st.session_state.pop(f"pending_answer_{interview.id}_{index}", None)
-    db.set_current_index(interview.id, index + 1)
-    st.rerun()
 
 
 def render_candidate_questions(interview: db.InterviewRecord) -> None:
