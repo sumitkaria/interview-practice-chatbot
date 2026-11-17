@@ -229,10 +229,40 @@ def test_normalize_questions_and_coach_prompt():
 
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
+    assert "ANSWER SHAPE: career_story" in thin
     full = prompts.coach_input("job", "resume", "Tell me about yourself.", "I spent four years building hiring tools for clinics")
     assert "Stay close" in full
+    assert "Do not invent" in prompts.COACH_INSTRUCTIONS
     assert prompts.is_thin_transcript("um hello")
     assert not prompts.is_thin_transcript("I spent four years building hiring tools for clinics and teams")
+
+    shaped = {
+        "Tell me about yourself.": "career_story",
+        "What drew you to this role?": "why_role",
+        "Why should we hire you?": "why_hire",
+        "What is your greatest weakness?": "weakness",
+        "Why are you leaving your current role?": "leaving",
+        "Walk me through a piece of work that shows how you operate.": "behavioral",
+        "Which skill in this role is your strongest, on a scale from 1 to 10?": "rating",
+        "Give me a practical example of how you would use that skill here.": "technical",
+        "Tell me about a time you disagreed with someone and how you handled it.": "conflict",
+        "Tell me about a time you made a mistake and what changed afterward.": "mistake",
+        "What are your salary expectations for this role?": "salary",
+        "What part of this role will stretch you, and how will you handle that?": "weakness",
+        "What does good work look like to you in this kind of role?": "open",
+        "How do you work when the team is remote or hybrid?": "remote",
+        "Where do you want this role to take you over the next couple of years?": "direction",
+        "What would you want to have accomplished by the end of the first six months?": "plan",
+        "Is there anything about your experience you want to make sure I understand?": "closing",
+        "Tell me about a result you are proud of and what you personally did.": "achievement",
+    }
+    for question, shape in shaped.items():
+        assert prompts.answer_shape(question) == shape, question
+    spoken = prompts.polish_spoken_answer(
+        "That's a great question. Situation: The queue was late. Action: I rebuilt the rota. Result: We caught up."
+    )
+    assert spoken == "The queue was late. I rebuilt the rota. We caught up."
+    assert prompts.polish_spoken_answer("I led the migration.") == "I led the migration."
 
 
 def test_grok_requests_use_the_flagship_model(monkeypatch):
@@ -261,6 +291,9 @@ def test_grok_requests_use_the_flagship_model(monkeypatch):
     assert answer == "I built the hiring workflow."
     assert guidance == "Lead with the result."
     assert bridge == ""
+    assert coach.responses.kwargs["reasoning"] == {"effort": "medium"}
+    assert "ANSWER SHAPE: career_story" in coach.responses.kwargs["input"][1]["content"]
+    assert "Do not invent" in coach.responses.kwargs["input"][0]["content"]
 
 
 def test_missing_grok_key(monkeypatch):

@@ -66,6 +66,14 @@ def response_text(response) -> str:
     raise GrokError("The AI interviewer returned an empty response. Try again.")
 
 
+def coaching_effort() -> str:
+    """Coaching follows a tighter rubric than question writing, so it should not run on low effort."""
+    effort = config.grok_effort()
+    if effort == "low":
+        return "medium"
+    return effort
+
+
 def complete(
     instructions: str,
     user_content,
@@ -74,6 +82,7 @@ def complete(
     max_output_tokens: int,
     client=None,
     user_id: str | None = None,
+    effort: str | None = None,
 ) -> str:
     api_key = require_api_key()
     if not _MODEL_SLOTS.acquire(timeout=8):
@@ -87,7 +96,7 @@ def complete(
                 raise GrokError(str(exc)) from exc
         response = grok.responses.create(
             model=config.grok_model(),
-            reasoning={"effort": config.grok_effort()},
+            reasoning={"effort": effort or config.grok_effort()},
             store=False,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=cache_key,
@@ -165,6 +174,7 @@ def coach_answer(
         max_output_tokens=4000,
         client=client,
         user_id=user_id,
+        effort=coaching_effort(),
     )
     try:
         payload = prompts.parse_model_json(raw)
@@ -173,7 +183,9 @@ def coach_answer(
         cleaned = raw.strip()
         if not cleaned:
             raise GrokError("The AI interviewer returned an empty answer. Try again.")
-        return cleaned, "That already has a clear point. Next time, add the result in one sentence.", ""
+        if not cleaned.startswith("{") and not cleaned.startswith("```"):
+            cleaned = prompts.polish_spoken_answer(cleaned)
+        return cleaned, "That already has a clear point. Next time, add the result in one sentence and tie it to this role.", ""
 
 
 def continue_small_talk(
