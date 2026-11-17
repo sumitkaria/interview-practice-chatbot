@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from docx import Document
 
+from streamlit.testing.v1 import AppTest
+
 from interview_app import auth, claude_client, config, db, files, mailer, prompts, ui
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -310,7 +312,7 @@ def test_account_can_choose_model_and_effort(monkeypatch):
 
 def test_missing_claude_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(config, "anthropic_api_key", lambda: None)
     with pytest.raises(claude_client.ClaudeNotConfigured):
         claude_client.generate_questions("job", "resume", cache_key="user")
 
@@ -400,6 +402,74 @@ def test_blank_editor_does_not_erase_saved_materials():
     saved = db.get_profile(user.id)
     assert saved.job_description == "Updated job only"
     assert saved.resume_text == "Original resume"
+
+
+def _editor_screen():
+    import streamlit as st
+
+    from interview_app import db, ui
+
+    user = db.get_user(st.session_state["uid"])
+    profile = db.get_profile(user.id)
+    ui.ensure_drafts(user, profile)
+    ui.render_sidebar(user, profile)
+
+
+def _assert_ran(app: AppTest) -> None:
+    failures = [exc.value for exc in app.exception]
+    assert not failures, failures
+
+
+def _area(app: AppTest, label: str) -> str:
+    found = [area.value for area in app.text_area if area.label == label]
+    assert found, [area.label for area in app.text_area]
+    return found[0]
+
+
+def test_file_uploads_update_the_other_editor_without_crashing():
+    user = auth.register_user("Sumit", "upload-widgets@example.com", "correct horse")
+    db.save_profile(user.id, "Original job", "job.txt", "Original resume", "resume.txt")
+    app = AppTest.from_function(_editor_screen)
+    app.session_state["uid"] = user.id
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "Job description text") == "Original job"
+    assert _area(app, "Résumé text") == "Original resume"
+
+    resume_uploader = next(item for item in app.file_uploader if item.label == "Update résumé")
+    resume_uploader.upload("background.txt", b"Led the platform team", "text/plain")
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "Job description text") == "Original job"
+    assert _area(app, "Résumé text") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Original job"
+    assert saved.resume_text == "Led the platform team"
+    assert saved.resume_source == "background.txt"
+    assert saved.resume_file_id
+
+    job_uploader = next(item for item in app.file_uploader if item.label == "Update job description")
+    job_uploader.upload("role.txt", b"Director of analytics", "text/plain")
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "Job description text") == "Director of analytics"
+    assert _area(app, "Résumé text") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Director of analytics"
+    assert saved.job_source == "role.txt"
+    assert saved.resume_text == "Led the platform team"
+    assert saved.job_file_id
+
+    job_uploader = next(item for item in app.file_uploader if item.label == "Update job description")
+    job_uploader.upload("slides.pptx", b"not a real deck", "application/vnd.ms-powerpoint")
+    app.run()
+    _assert_ran(app)
+    assert any("could not be read" in item.value for item in app.error)
+    assert _area(app, "Job description text") == "Director of analytics"
+    assert _area(app, "Résumé text") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Director of analytics"
+    assert saved.resume_text == "Led the platform team"
 
 
 def test_blank_profile_is_restored_from_the_interview_or_file():

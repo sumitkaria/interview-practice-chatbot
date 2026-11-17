@@ -852,13 +852,14 @@ def render_sidebar_editor(
     sig_key: str,
     upload_key: str,
 ) -> None:
-    uploads = st.file_uploader(
+    st.file_uploader(
         upload_label,
         accept_multiple_files=True,
         key=upload_key,
         help="10MB max file size",
+        on_change=consume_material_upload,
+        args=(upload_key, sig_key, draft_key, source_key, user.id),
     )
-    apply_upload(uploads, sig_key, draft_key, source_key, image_reader_for(user.id), user.id)
     error = st.session_state.get(sig_key + "_error")
     if error:
         st.error(error)
@@ -1023,6 +1024,24 @@ def image_reader_for(user_id: str):
     return read
 
 
+def consume_material_upload(upload_key: str, sig_key: str, draft_key: str, source_key: str, user_id: str) -> None:
+    """Save a chosen file before either text box is drawn.
+
+    The job box is already on the page by the time a résumé upload is handled
+    in the page body. Writing ``job_draft`` then raises
+    StreamlitWidgetAlreadyInstantiatedError. This callback runs first, so both
+    editors can take the new text.
+    """
+    apply_upload(
+        st.session_state.get(upload_key),
+        sig_key,
+        draft_key,
+        source_key,
+        image_reader_for(user_id),
+        user_id,
+    )
+
+
 def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader, user_id: str) -> None:
     items = list(uploads or [])
     signature = tuple((item.name, item.size) for item in items)
@@ -1052,7 +1071,6 @@ def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader,
             "The text was saved. The original file was not kept because stored files are at the 25 MB limit."
         )
     autosave_materials(user_id, clear_uploads=True)
-    st.rerun()
 
 
 def _kept_material(state, widget_key: str, durable_key: str, saved: str) -> str:
