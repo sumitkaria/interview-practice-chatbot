@@ -543,21 +543,23 @@ def render_contact(prefix: str) -> None:
         if not send:
             return
         cleaned = (message or "").strip()
+        reply_email = (reply or "").strip()
         if not cleaned:
             st.error("Write a message first.")
             return
-        try:
-            db.save_contact_message(reply, cleaned)
-            if address and mailer.configured():
-                mailer.send_email(
-                    address,
-                    "Interview Practice message",
-                    f"From: {reply.strip() or 'not given'}\n\n{cleaned}\n",
-                )
-        except Exception:
-            st.error("The message could not be sent.")
+        if "@" not in reply_email:
+            st.error("Add your email so we can reply.")
             return
-        st.success("Message sent. We'll reply by email.")
+        try:
+            db.save_contact_message(reply_email, cleaned)
+            sent = mailer.deliver_contact(reply_email, cleaned)
+        except Exception:
+            st.error("Your message was saved, but the email could not be sent.")
+            return
+        if sent:
+            st.success("Message sent. We'll reply by email.")
+        else:
+            st.warning("Your message is saved. No email was sent because mail is not connected.")
 
 
 def render_app(user: db.UserRecord) -> None:

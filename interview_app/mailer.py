@@ -16,6 +16,27 @@ def app_link(kind: str, token: str) -> str:
     return f"{config.public_app_url()}/?{kind}={token}"
 
 
+def deliver_contact(reply_email: str, message: str) -> bool:
+    """Email the contact note. Return False when no mail account is connected."""
+    if not configured():
+        return False
+    reply = (reply_email or "").strip()
+    inbox = config.contact_email()
+    note = f"From: {reply or 'not given'}\n\n{message.strip()}\n"
+    sent = False
+    if inbox:
+        send_email(inbox, "Interview Practice message", note)
+        sent = True
+    if reply and reply.lower() != inbox.lower():
+        send_email(
+            reply,
+            "We received your Interview Practice message",
+            "We received your message and will reply.\n\n" + message.strip() + "\n",
+        )
+        sent = True
+    return sent
+
+
 def send_email(recipient: str, subject: str, body: str) -> None:
     settings = config.smtp_settings()
     if settings is None:

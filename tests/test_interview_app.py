@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from interview_app import auth, config, db, files, grok_client, prompts, ui
+from interview_app import auth, config, db, files, grok_client, mailer, prompts, ui
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -448,6 +448,19 @@ def test_login_locks_after_repeated_failures():
         auth.login_user("lock@example.com", "long-password")
     db.clear_login_failures("lock@example.com")
     assert auth.login_user("lock@example.com", "long-password").email == "lock@example.com"
+
+
+def test_contact_form_does_not_pretend_an_email_was_sent(monkeypatch):
+    monkeypatch.setattr(mailer, "configured", lambda: False)
+    assert mailer.deliver_contact("person@example.com", "Hello") is False
+
+    sent = []
+    monkeypatch.setattr(mailer, "configured", lambda: True)
+    monkeypatch.setattr(config, "contact_email", lambda: "")
+    monkeypatch.setattr(mailer, "send_email", lambda *args: sent.append(args))
+    assert mailer.deliver_contact("person@example.com", "Hello") is True
+    assert sent[0][0] == "person@example.com"
+    assert "Hello" in sent[0][2]
 
 
 def test_contact_message_is_saved_for_the_account_owner():
