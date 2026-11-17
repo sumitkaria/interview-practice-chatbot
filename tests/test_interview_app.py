@@ -1,4 +1,5 @@
 import io
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture(autouse=True)
 def fresh_database(tmp_path):
     url = "sqlite:///" + (tmp_path / "test.db").resolve().as_posix()
+    db.set_actor(None)
     db.init_db(url, force=True)
     yield
+    db.set_actor(None)
 
 
 class FakeResponses:
@@ -110,7 +113,7 @@ def test_google_account_links_existing_email_and_can_be_new():
 
     google_only = db.upsert_google_user("new@example.com", "", "sub-2")
     assert google_only.password_hash is None
-    with pytest.raises(auth.AuthError, match="Google"):
+    with pytest.raises(auth.AuthError, match="incorrect"):
         auth.login_user("new@example.com", "long-password")
 
 
@@ -376,6 +379,107 @@ def test_extracts_common_file_types():
         files.extract_named_bytes("old.doc", b"not really a doc", None)
     with pytest.raises(ValueError, match="could not be read"):
         files.extract_named_bytes("slides.pptx", b"nope", None)
+
+
+def test_sessions_are_revocable_and_legacy_cookies_do_not_sign_in():
+    user = auth.register_user("Sam", "session@example.com", "long-password")
+    token = auth.open_session(user.id, "secret", now=1_700_000_000)
+    assert auth.authenticated_user_id(token, "secret", now=1_700_000_000) == user.id
+    auth.revoke_session_token(token, "secret")
+    assert auth.authenticated_user_id(token, "secret", now=1_700_000_000) is None
+    legacy = auth.make_session_token(user.id, "secret", now=1_700_000_000)
+    assert auth.read_session_token(legacy, "secret", now=1_700_000_000) == user.id
+    assert auth.authenticated_user_id(legacy, "secret", now=1_700_000_000) is None
+
+
+def test_login_locks_after_repeated_failures():
+    auth.register_user("Sam", "lock@example.com", "long-password")
+    for _ in range(auth.LOGIN_FAILURE_LIMIT):
+        db.note_login_failure("lock@example.com", limit=auth.LOGIN_FAILURE_LIMIT, lock_seconds=60)
+    with pytest.raises(auth.AuthError, match="Too many"):
+        auth.login_user("lock@example.com", "long-password")
+    db.clear_login_failures("lock@example.com")
+    assert auth.login_user("lock@example.com", "long-password").email == "lock@example.com"
+
+
+def test_password_reset_and_change_sign_out_other_sessions(monkeypatch):
+    user = auth.register_user("Sam", "reset@example.com", "long-password")
+    sent = {}
+
+    def capture(recipient, subject, body):
+        sent["body"] = body
+
+    monkeypatch.setattr("interview_app.mailer.configured", lambda: True)
+    monkeypatch.setattr("interview_app.mailer.send_email", capture)
+    monkeypatch.setattr(
+        "interview_app.mailer.app_link",
+        lambda kind, token: f"https://example.test/?{kind}={token}",
+    )
+    auth.request_password_reset("missing@example.com")
+    assert "body" not in sent
+    auth.request_password_reset("reset@example.com")
+    token = sent["body"].split("reset=")[1].split()[0]
+    auth.reset_password(token, "newer-password")
+    assert auth.login_user("reset@example.com", "newer-password").id == user.id
+
+    session = auth.open_session(user.id, "secret", now=1_700_000_000)
+    auth.change_password(user.id, "newer-password", "newest-password")
+    assert auth.authenticated_user_id(session, "secret", now=1_700_000_000) is None
+    assert auth.login_user("reset@example.com", "newest-password").id == user.id
+
+
+def test_quota_files_export_and_owner(monkeypatch):
+    monkeypatch.setattr(config, "max_interviews_per_day", lambda: 1)
+    user = auth.register_user("Sam", "quota@example.com", "long-password")
+    other = auth.register_user("Other", "other-quota@example.com", "long-password")
+    first = db.create_interview(user.id, "Job", "Resume", ["Tell me about yourself."])
+    with pytest.raises(db.QuotaExceeded):
+        db.create_interview(user.id, "Job", "Resume", ["Tell me about yourself."])
+
+    monkeypatch.setattr(config, "max_model_calls_per_day", lambda: 1)
+    db.charge_model_call(user.id)
+    with pytest.raises(db.QuotaExceeded):
+        db.charge_model_call(user.id)
+
+    file_id = db.store_file(user.id, "resume", "resume.pdf", b"resume-bytes")
+    assert file_id
+    assert db.read_file(file_id, user.id)[1] == b"resume-bytes"
+    assert db.read_file(file_id, other.id) is None
+
+    db.set_actor(other.id)
+    assert db.get_interview(first.id) is None
+    with pytest.raises(db.NotOwner):
+        db.set_interview_status(first.id, "completed")
+    db.set_actor(None)
+
+    exported = db.export_account(user.id)
+    assert exported["account"]["email"] == "quota@example.com"
+    assert exported["interviews"][0]["id"] == first.id
+    assert "password" not in json.dumps(exported).lower()
+    db.delete_account(user.id)
+    assert db.get_user(user.id) is None
+    assert db.read_file(file_id, user.id) is None
+    assert db.get_user(other.id) is not None
+
+
+def test_pdf_page_cap_and_cloud_secrets(monkeypatch):
+    class ManyPages:
+        pages = [object()] * (files.MAX_PDF_PAGES + 1)
+
+        def __init__(self, _buffer):
+            pass
+
+    monkeypatch.setattr("pypdf.PdfReader", ManyPages)
+    with pytest.raises(ValueError, match="pages"):
+        files.extract_named_bytes("long.pdf", b"%PDF", None)
+
+    monkeypatch.setattr(config, "on_streamlit_cloud", lambda: True)
+
+    def no_secret(name, default=None):
+        return None
+
+    monkeypatch.setattr(config, "secret", no_secret)
+    assert "DATABASE_URL" in config.cloud_config_problem()
 
 
 def test_voice_and_session_components_exist():

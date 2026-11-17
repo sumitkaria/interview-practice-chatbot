@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, select
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 _engine = None
 _factory = None
+_actor: contextvars.ContextVar[str | None] = contextvars.ContextVar("interview_actor", default=None)
+_script_locks: dict[str, threading.Lock] = {}
+_script_locks_guard = threading.Lock()
+STORAGE_CAP_BYTES = 25 * 1024 * 1024
+REPLACED_INTERVIEW_DAYS = 90
+EVENT_RETENTION_DAYS = 30
+APP_TIMEZONE = ZoneInfo("America/Edmonton")
 
 
 class EmailTaken(Exception):
@@ -23,6 +33,14 @@ class EmailTaken(Exception):
 
 class AuthLinkError(Exception):
     """A Google account could not be linked to the email."""
+
+
+class QuotaExceeded(Exception):
+    """This account has used its practice allowance for today."""
+
+
+class NotOwner(Exception):
+    """The signed-in account does not own that interview."""
 
 
 def utcnow() -> datetime:
@@ -41,6 +59,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(80), default="")
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -53,6 +72,8 @@ class Profile(Base):
     job_source: Mapped[str] = mapped_column(String(300), default="")
     resume_text: Mapped[str] = mapped_column(Text, default="")
     resume_source: Mapped[str] = mapped_column(String(300), default="")
+    job_file_id: Mapped[str] = mapped_column(String(36), default="")
+    resume_file_id: Mapped[str] = mapped_column(String(36), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -83,6 +104,60 @@ class Turn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class LoginSession(Base):
+    __tablename__ = "login_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LoginGuard(Base):
+    __tablename__ = "login_guards"
+
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class StoredFile(Base):
+    __tablename__ = "stored_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="")
+    filename: Mapped[str] = mapped_column(String(300), default="")
+    content_type: Mapped[str] = mapped_column(String(120), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AppEvent(Base):
+    __tablename__ = "app_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    message: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    purpose: Mapped[str] = mapped_column(String(20), default="reset")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 @dataclass(frozen=True)
 class UserRecord:
     id: str
@@ -90,6 +165,7 @@ class UserRecord:
     name: str
     password_hash: str | None
     google_sub: str | None
+    email_verified_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +176,8 @@ class ProfileRecord:
     resume_text: str
     resume_source: str
     updated_at: datetime
+    job_file_id: str = ""
+    resume_file_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,6 +204,8 @@ class InterviewRecord:
     chat_wrap: bool = False
     chat_started_at: str = ""
     chat_log: tuple[tuple[str, str], ...] = ()
+    job_file_id: str = ""
+    resume_file_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -159,10 +239,18 @@ def init_db(url: str | None = None, force: bool = False) -> None:
             poolclass=StaticPool,
         )
     else:
-        engine = create_engine(url, pool_pre_ping=True)
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=0,
+            pool_recycle=300,
+        )
     Base.metadata.create_all(engine)
+    _migrate(engine)
     _engine = engine
     _factory = sessionmaker(bind=engine, expire_on_commit=False)
+    prune_old_rows()
 
 
 @contextmanager
@@ -186,6 +274,7 @@ def _user(row: User) -> UserRecord:
         name=row.name or "",
         password_hash=row.password_hash,
         google_sub=row.google_sub,
+        email_verified_at=row.email_verified_at,
     )
 
 
@@ -197,6 +286,8 @@ def _profile(row: Profile) -> ProfileRecord:
         resume_text=row.resume_text or "",
         resume_source=row.resume_source or "",
         updated_at=row.updated_at,
+        job_file_id=row.job_file_id or "",
+        resume_file_id=row.resume_file_id or "",
     )
 
 
@@ -251,6 +342,8 @@ def _interview(row: Interview) -> InterviewRecord:
             for item in (payload.get("chat") or [])
             if isinstance(item, dict)
         ),
+        job_file_id=str(payload.get("job_file_id") or ""),
+        resume_file_id=str(payload.get("resume_file_id") or ""),
     )
 
 
@@ -312,6 +405,8 @@ def upsert_google_user(email: str, name: str, google_sub: str) -> UserRecord:
             if name and not by_sub.name:
                 by_sub.name = name
             by_sub.updated_at = now
+            if by_sub.email_verified_at is None:
+                by_sub.email_verified_at = now
             return _user(by_sub)
 
         by_email = session.scalar(select(User).where(User.email == email))
@@ -324,6 +419,8 @@ def upsert_google_user(email: str, name: str, google_sub: str) -> UserRecord:
             if name:
                 by_email.name = name
             by_email.updated_at = now
+            if by_email.email_verified_at is None:
+                by_email.email_verified_at = now
             return _user(by_email)
 
         row = User(
@@ -332,6 +429,7 @@ def upsert_google_user(email: str, name: str, google_sub: str) -> UserRecord:
             name=name or email.split("@", 1)[0][:80],
             password_hash=None,
             google_sub=google_sub,
+            email_verified_at=now,
             created_at=now,
             updated_at=now,
         )
@@ -351,6 +449,8 @@ def save_profile(
     job_source: str,
     resume_text: str,
     resume_source: str,
+    job_file_id: str | None = None,
+    resume_file_id: str | None = None,
 ) -> ProfileRecord:
     now = utcnow()
     with session_scope() as session:
@@ -362,6 +462,8 @@ def save_profile(
                 job_source=job_source[:300],
                 resume_text=resume_text,
                 resume_source=resume_source[:300],
+                job_file_id=(job_file_id or "")[:36],
+                resume_file_id=(resume_file_id or "")[:36],
                 updated_at=now,
             )
             session.add(row)
@@ -370,6 +472,10 @@ def save_profile(
             row.job_source = job_source[:300]
             row.resume_text = resume_text
             row.resume_source = resume_source[:300]
+            if job_file_id is not None:
+                row.job_file_id = job_file_id[:36]
+            if resume_file_id is not None:
+                row.resume_file_id = resume_file_id[:36]
             row.updated_at = now
         return _profile(row)
 
@@ -386,7 +492,10 @@ def create_interview(
     job_source: str = "",
     resume_source: str = "",
     role_brief: str = "",
+    job_file_id: str = "",
+    resume_file_id: str = "",
 ) -> InterviewRecord:
+    ensure_interview_budget(user_id)
     now = utcnow()
     with session_scope() as session:
         active = session.scalars(
@@ -419,6 +528,8 @@ def create_interview(
                     "chat": [],
                     "questions": list(questions),
                     "bridges": {},
+                    "job_file_id": job_file_id,
+                    "resume_file_id": resume_file_id,
                 }
             ),
             current_index=0,
@@ -431,19 +542,29 @@ def create_interview(
 
 def get_interview(interview_id: str) -> InterviewRecord | None:
     with session_scope() as session:
-        row = session.get(Interview, interview_id)
+        try:
+            row = _owned_interview(session, interview_id)
+        except NotOwner:
+            return None
         return _interview(row) if row else None
 
 
-def list_interviews(user_id: str, limit: int = 100) -> list[InterviewRecord]:
+def list_interviews(user_id: str, limit: int = 100, offset: int = 0) -> list[InterviewRecord]:
     with session_scope() as session:
         rows = session.scalars(
             select(Interview)
             .where(Interview.user_id == user_id)
             .order_by(Interview.created_at.desc())
+            .offset(max(0, offset))
             .limit(limit)
         ).all()
         return [_interview(row) for row in rows]
+
+
+def count_interviews(user_id: str) -> int:
+    with session_scope() as session:
+        total = session.scalar(select(func.count()).select_from(Interview).where(Interview.user_id == user_id))
+        return int(total or 0)
 
 
 def latest_interview(user_id: str) -> InterviewRecord | None:
@@ -460,20 +581,43 @@ def latest_interview(user_id: str) -> InterviewRecord | None:
 
 
 def set_current_index(interview_id: str, index: int) -> None:
-    with session_scope() as session:
-        row = session.get(Interview, interview_id)
-        if row is not None:
-            row.current_index = max(0, index)
+    with _script_lock(interview_id):
+        with session_scope() as session:
+            row = _owned_interview(session, interview_id)
+            if row is not None:
+                row.current_index = max(0, index)
+
+
+def _script_lock(interview_id: str) -> threading.Lock:
+    with _script_locks_guard:
+        if len(_script_locks) > 1000:
+            _script_locks.clear()
+        return _script_locks.setdefault(interview_id, threading.Lock())
+
+
+def _owned_interview(session, interview_id: str) -> Interview | None:
+    row = session.get(Interview, interview_id)
+    actor = _actor.get()
+    if row is None:
+        return None
+    if actor and row.user_id != actor:
+        raise NotOwner()
+    return row
 
 
 def _update_script(interview_id: str, change) -> None:
-    with session_scope() as session:
-        row = session.get(Interview, interview_id)
-        if row is None:
-            return
-        payload = _script_payload(row.questions_json)
-        change(payload)
-        row.questions_json = json.dumps(payload)
+    with _script_lock(interview_id):
+        with session_scope() as session:
+            row = _owned_interview(session, interview_id)
+            if row is None:
+                return
+            if session.get_bind().dialect.name == "postgresql":
+                row = session.scalar(select(Interview).where(Interview.id == interview_id).with_for_update())
+                if row is None:
+                    return
+            payload = _script_payload(row.questions_json)
+            change(payload)
+            row.questions_json = json.dumps(payload)
 
 
 def mark_mic_checked(interview_id: str) -> None:
@@ -512,37 +656,42 @@ def mark_chat_done(interview_id: str) -> None:
 
 
 def mark_brief_done(interview_id: str) -> None:
-    with session_scope() as session:
-        row = session.get(Interview, interview_id)
-        if row is None:
-            return
-        payload = _script_payload(row.questions_json)
-        payload["brief_done"] = True
-        row.questions_json = json.dumps(payload)
+    _update_script(interview_id, lambda payload: payload.__setitem__("brief_done", True))
 
 
 def set_bridge(interview_id: str, question_index: int, bridge: str) -> None:
     text = " ".join((bridge or "").split())[:240]
     if not text:
         return
-    with session_scope() as session:
-        row = session.get(Interview, interview_id)
-        if row is None:
-            return
-        payload = _script_payload(row.questions_json)
-        payload["bridges"][str(question_index)] = text
-        row.questions_json = json.dumps(payload)
+
+    def change(payload: dict) -> None:
+        bridges = payload.get("bridges")
+        if not isinstance(bridges, dict):
+            bridges = {}
+        bridges[str(question_index)] = text
+        payload["bridges"] = bridges
+
+    _update_script(interview_id, change)
 
 
 def set_interview_status(interview_id: str, status: str) -> None:
     with session_scope() as session:
-        row = session.get(Interview, interview_id)
+        row = _owned_interview(session, interview_id)
         if row is not None:
             row.status = status
 
 
+def _turns_allowed(session, interview_id: str) -> bool:
+    try:
+        return _owned_interview(session, interview_id) is not None
+    except NotOwner:
+        return False
+
+
 def get_turn(interview_id: str, question_index: int) -> TurnRecord | None:
     with session_scope() as session:
+        if not _turns_allowed(session, interview_id):
+            return None
         row = session.scalar(
             select(Turn).where(
                 Turn.interview_id == interview_id,
@@ -554,6 +703,8 @@ def get_turn(interview_id: str, question_index: int) -> TurnRecord | None:
 
 def list_turns(interview_id: str) -> list[TurnRecord]:
     with session_scope() as session:
+        if not _turns_allowed(session, interview_id):
+            return []
         rows = session.scalars(
             select(Turn)
             .where(Turn.interview_id == interview_id)
@@ -573,6 +724,8 @@ def save_turn(
 ) -> TurnRecord:
     now = utcnow()
     with session_scope() as session:
+        if _owned_interview(session, interview_id) is None:
+            raise NotOwner()
         row = session.scalar(
             select(Turn).where(
                 Turn.interview_id == interview_id,
@@ -603,6 +756,8 @@ def save_turn(
 
 def delete_turn(interview_id: str, question_index: int) -> None:
     with session_scope() as session:
+        if _owned_interview(session, interview_id) is None:
+            return
         row = session.scalar(
             select(Turn).where(
                 Turn.interview_id == interview_id,
@@ -611,3 +766,408 @@ def delete_turn(interview_id: str, question_index: int) -> None:
         )
         if row is not None:
             session.delete(row)
+
+
+def set_actor(user_id: str | None) -> None:
+    _actor.set(user_id)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _migrate(engine) -> None:
+    dialect = engine.dialect.name
+    timestamp = "TIMESTAMP" if dialect == "sqlite" else "TIMESTAMP WITH TIME ZONE"
+    additions = {
+        "users": [("email_verified_at", timestamp)],
+        "profiles": [
+            ("job_file_id", "VARCHAR(36) DEFAULT ''"),
+            ("resume_file_id", "VARCHAR(36) DEFAULT ''"),
+        ],
+    }
+    existing = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in additions.items():
+            if not existing.has_table(table):
+                continue
+            present = {column["name"] for column in existing.get_columns(table)}
+            for name, ddl in columns:
+                if name in present:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+def prune_old_rows() -> None:
+    now = utcnow()
+    with session_scope() as session:
+        old_events = session.scalars(
+            select(AppEvent).where(AppEvent.created_at < now - timedelta(days=EVENT_RETENTION_DAYS))
+        ).all()
+        for row in old_events:
+            session.delete(row)
+        replaced = session.scalars(
+            select(Interview).where(
+                Interview.status == "replaced",
+                Interview.created_at < now - timedelta(days=REPLACED_INTERVIEW_DAYS),
+            )
+        ).all()
+        for interview in replaced:
+            turns = session.scalars(select(Turn).where(Turn.interview_id == interview.id)).all()
+            for turn in turns:
+                session.delete(turn)
+            session.delete(interview)
+
+
+def start_of_local_day() -> datetime:
+    now = datetime.now(APP_TIMEZONE)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def _daily_limits() -> tuple[int, int]:
+    from interview_app import config
+
+    return config.max_interviews_per_day(), config.max_model_calls_per_day()
+
+
+def interviews_today(user_id: str) -> int:
+    with session_scope() as session:
+        total = session.scalar(
+            select(func.count())
+            .select_from(Interview)
+            .where(Interview.user_id == user_id, Interview.created_at >= start_of_local_day())
+        )
+        return int(total or 0)
+
+
+def model_calls_today(user_id: str) -> int:
+    with session_scope() as session:
+        total = session.scalar(
+            select(func.count())
+            .select_from(AppEvent)
+            .where(
+                AppEvent.user_id == user_id,
+                AppEvent.kind == "model_call",
+                AppEvent.created_at >= start_of_local_day(),
+            )
+        )
+        return int(total or 0)
+
+
+def usage_today(user_id: str) -> tuple[int, int, int, int]:
+    interviews, calls = _daily_limits()
+    return interviews_today(user_id), interviews, model_calls_today(user_id), calls
+
+
+def ensure_interview_budget(user_id: str) -> None:
+    used, limit, _calls, _call_limit = usage_today(user_id)
+    if used >= limit:
+        raise QuotaExceeded(
+            f"This account has started {limit} interviews today. The allowance resets overnight."
+        )
+
+
+def charge_model_call(user_id: str) -> None:
+    _interviews, _interview_limit, used, limit = usage_today(user_id)
+    if used >= limit:
+        raise QuotaExceeded(
+            "This account has reached today's limit for interviewer replies. It resets overnight."
+        )
+    record_event(user_id, "model_call", "")
+
+
+def record_event(user_id: str | None, kind: str, message: str) -> None:
+    text_value = " ".join((message or "").split())[:300]
+    try:
+        with session_scope() as session:
+            session.add(
+                AppEvent(
+                    id=str(uuid.uuid4()),
+                    user_id=(user_id or "")[:36],
+                    kind=kind[:40],
+                    message=text_value,
+                    created_at=utcnow(),
+                )
+            )
+    except Exception:
+        return
+
+
+def recent_events(kind: str, limit: int = 30) -> list[tuple[datetime, str, str]]:
+    with session_scope() as session:
+        rows = session.scalars(
+            select(AppEvent)
+            .where(AppEvent.kind == kind)
+            .order_by(AppEvent.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [(row.created_at, row.user_id, row.message) for row in rows]
+
+
+def create_login_session(session_id: str, user_id: str, expires_at: datetime) -> None:
+    now = utcnow()
+    with session_scope() as session:
+        session.add(
+            LoginSession(
+                id=session_id,
+                user_id=user_id,
+                expires_at=expires_at,
+                revoked_at=None,
+                created_at=now,
+            )
+        )
+
+
+def login_session_active(session_id: str, user_id: str, now: datetime | None = None) -> bool:
+    current = now or utcnow()
+    with session_scope() as session:
+        row = session.get(LoginSession, session_id)
+        if row is None or row.user_id != user_id or row.revoked_at is not None:
+            return False
+        expires = _aware(row.expires_at)
+        return expires is not None and expires > current
+
+
+def revoke_login_session(session_id: str) -> None:
+    with session_scope() as session:
+        row = session.get(LoginSession, session_id)
+        if row is not None and row.revoked_at is None:
+            row.revoked_at = utcnow()
+
+
+def revoke_user_sessions(user_id: str) -> None:
+    now = utcnow()
+    with session_scope() as session:
+        rows = session.scalars(select(LoginSession).where(LoginSession.user_id == user_id)).all()
+        for row in rows:
+            if row.revoked_at is None:
+                row.revoked_at = now
+
+
+def login_locked(email: str, now: datetime | None = None) -> bool:
+    current = now or utcnow()
+    with session_scope() as session:
+        row = session.get(LoginGuard, email.strip().lower())
+        locked = _aware(row.locked_until) if row is not None else None
+        return bool(locked and locked > current)
+
+
+def note_login_failure(email: str, *, limit: int = 8, lock_seconds: int = 15 * 60) -> None:
+    email = email.strip().lower()
+    now = utcnow()
+    with session_scope() as session:
+        row = session.get(LoginGuard, email)
+        if row is None:
+            row = LoginGuard(email=email, failures=1, locked_until=None, updated_at=now)
+            session.add(row)
+        else:
+            row.failures = int(row.failures or 0) + 1
+            row.updated_at = now
+        if row.failures >= limit:
+            row.locked_until = now + timedelta(seconds=lock_seconds)
+
+
+def clear_login_failures(email: str) -> None:
+    with session_scope() as session:
+        row = session.get(LoginGuard, email.strip().lower())
+        if row is not None:
+            session.delete(row)
+
+
+def referenced_file_ids(session, user_id: str) -> set[str]:
+    kept: set[str] = set()
+    profile = session.get(Profile, user_id)
+    if profile is not None:
+        kept.add(profile.job_file_id or "")
+        kept.add(profile.resume_file_id or "")
+    interviews = session.scalars(select(Interview).where(Interview.user_id == user_id)).all()
+    for interview in interviews:
+        payload = _script_payload(interview.questions_json)
+        kept.add(str(payload.get("job_file_id") or ""))
+        kept.add(str(payload.get("resume_file_id") or ""))
+    kept.discard("")
+    return kept
+
+
+def store_file(user_id: str, kind: str, filename: str, data: bytes, content_type: str = "") -> str | None:
+    if not data or len(data) > 10 * 1024 * 1024:
+        return None
+    with session_scope() as session:
+        total = int(
+            session.scalar(
+                select(func.coalesce(func.sum(StoredFile.size), 0)).where(StoredFile.user_id == user_id)
+            )
+            or 0
+        )
+        if total + len(data) > STORAGE_CAP_BYTES:
+            kept = referenced_file_ids(session, user_id)
+            oldest = session.scalars(
+                select(StoredFile).where(StoredFile.user_id == user_id).order_by(StoredFile.created_at)
+            ).all()
+            for row in oldest:
+                if row.id in kept:
+                    continue
+                total -= int(row.size or 0)
+                session.delete(row)
+                if total + len(data) <= STORAGE_CAP_BYTES:
+                    break
+            if total + len(data) > STORAGE_CAP_BYTES:
+                return None
+        file_id = str(uuid.uuid4())
+        session.add(
+            StoredFile(
+                id=file_id,
+                user_id=user_id,
+                kind=kind[:20],
+                filename=(filename or "upload")[:300],
+                content_type=(content_type or "")[:120],
+                size=len(data),
+                data=data,
+                created_at=utcnow(),
+            )
+        )
+        return file_id
+
+
+def read_file(file_id: str, user_id: str) -> tuple[str, bytes] | None:
+    if not file_id:
+        return None
+    with session_scope() as session:
+        row = session.get(StoredFile, file_id)
+        if row is None or row.user_id != user_id:
+            return None
+        return row.filename or "upload", bytes(row.data or b"")
+
+
+def save_password_token(user_id: str, token_hash: str, purpose: str, expires_at: datetime) -> None:
+    with session_scope() as session:
+        session.add(
+            PasswordReset(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                token_hash=token_hash,
+                purpose=purpose[:20],
+                expires_at=expires_at,
+                used_at=None,
+                created_at=utcnow(),
+            )
+        )
+
+
+def take_password_token(token_hash: str, purpose: str) -> str | None:
+    now = utcnow()
+    with session_scope() as session:
+        row = session.scalar(select(PasswordReset).where(PasswordReset.token_hash == token_hash))
+        if row is None or row.purpose != purpose or row.used_at is not None:
+            return None
+        expires = _aware(row.expires_at)
+        if expires is None or expires < now:
+            return None
+        row.used_at = now
+        return row.user_id
+
+
+def mark_email_verified(user_id: str) -> None:
+    with session_scope() as session:
+        row = session.get(User, user_id)
+        if row is not None and row.email_verified_at is None:
+            row.email_verified_at = utcnow()
+
+
+def set_password_hash(user_id: str, password_hash: str) -> None:
+    with session_scope() as session:
+        row = session.get(User, user_id)
+        if row is None:
+            return
+        row.password_hash = password_hash
+        row.updated_at = utcnow()
+
+
+def export_account(user_id: str) -> dict:
+    with session_scope() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            return {}
+        profile = session.get(Profile, user_id)
+        files = session.scalars(select(StoredFile).where(StoredFile.user_id == user_id)).all()
+        interviews = session.scalars(
+            select(Interview).where(Interview.user_id == user_id).order_by(Interview.created_at)
+        ).all()
+        payload = {
+            "account": {
+                "email": user.email,
+                "name": user.name,
+                "created_at": user.created_at.isoformat() if user.created_at else "",
+            },
+            "profile": {
+                "job_description": profile.job_description if profile else "",
+                "job_source": profile.job_source if profile else "",
+                "resume_text": profile.resume_text if profile else "",
+                "resume_source": profile.resume_source if profile else "",
+            },
+            "files": [
+                {"id": item.id, "kind": item.kind, "filename": item.filename, "size": item.size}
+                for item in files
+            ],
+            "interviews": [],
+        }
+        for interview in interviews:
+            turns = session.scalars(
+                select(Turn).where(Turn.interview_id == interview.id).order_by(Turn.question_index)
+            ).all()
+            payload["interviews"].append(
+                {
+                    "id": interview.id,
+                    "status": interview.status,
+                    "created_at": interview.created_at.isoformat() if interview.created_at else "",
+                    "job_description": interview.job_description,
+                    "resume_text": interview.resume_text,
+                    "script": _script_payload(interview.questions_json),
+                    "turns": [
+                        {
+                            "question": turn.question_text,
+                            "transcript": turn.transcript,
+                            "model_answer": turn.model_answer,
+                            "guidance": turn.guidance,
+                        }
+                        for turn in turns
+                    ],
+                }
+            )
+        return payload
+
+
+def delete_account(user_id: str) -> None:
+    with session_scope() as session:
+        interview_ids = list(
+            session.scalars(select(Interview.id).where(Interview.user_id == user_id)).all()
+        )
+        if interview_ids:
+            turns = session.scalars(select(Turn).where(Turn.interview_id.in_(interview_ids))).all()
+            for turn in turns:
+                session.delete(turn)
+            interviews = session.scalars(select(Interview).where(Interview.user_id == user_id)).all()
+            for interview in interviews:
+                session.delete(interview)
+        for model, column in (
+            (StoredFile, StoredFile.user_id),
+            (AppEvent, AppEvent.user_id),
+            (LoginSession, LoginSession.user_id),
+            (PasswordReset, PasswordReset.user_id),
+        ):
+            rows = session.scalars(select(model).where(column == user_id)).all()
+            for row in rows:
+                session.delete(row)
+        profile = session.get(Profile, user_id)
+        if profile is not None:
+            session.delete(profile)
+        user = session.get(User, user_id)
+        if user is not None:
+            guard = session.get(LoginGuard, user.email)
+            if guard is not None:
+                session.delete(guard)
+            session.delete(user)

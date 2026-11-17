@@ -9,6 +9,7 @@ from pathlib import Path
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_TEXT_CHARS = 60_000
 MAX_FILES = 8
+MAX_PDF_PAGES = 30
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".text", ".log"}
 HTML_EXTENSIONS = {".html", ".htm"}
@@ -119,7 +120,13 @@ def _read_pdf(data: bytes) -> str:
 
     try:
         reader = PdfReader(io.BytesIO(data))
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise ValueError(
+                f"That PDF has more than {MAX_PDF_PAGES} pages. Paste the part you want practiced."
+            )
         pages = [(page.extract_text() or "") for page in reader.pages]
+    except ValueError:
+        raise
     except Exception as exc:
         raise ValueError("That file could not be read. Paste the text instead.") from exc
     return "\n\n".join(pages)

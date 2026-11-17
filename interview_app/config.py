@@ -158,6 +158,80 @@ def on_streamlit_cloud() -> bool:
     return Path("/mount/src").is_dir()
 
 
+def _positive_int(name: str, default: int) -> int:
+    raw = secret(name)
+    if not raw:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_interviews_per_day() -> int:
+    return _positive_int("MAX_INTERVIEWS_PER_DAY", 6)
+
+
+def max_model_calls_per_day() -> int:
+    return _positive_int("MAX_MODEL_CALLS_PER_DAY", 160)
+
+
+def public_app_url() -> str:
+    value = (secret("PUBLIC_APP_URL") or "https://interviewpractice.streamlit.app").strip()
+    return value.rstrip("/") or "https://interviewpractice.streamlit.app"
+
+
+def admin_emails() -> set[str]:
+    raw = secret("ADMIN_EMAILS") or ""
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def is_admin(email: str) -> bool:
+    return email.strip().lower() in admin_emails()
+
+
+def smtp_settings() -> dict[str, str | int] | None:
+    host = secret("SMTP_HOST")
+    sender = secret("SMTP_FROM")
+    if not host or not sender:
+        return None
+    port_text = secret("SMTP_PORT") or "587"
+    try:
+        port = int(port_text)
+    except ValueError:
+        port = 587
+    return {
+        "host": host.strip(),
+        "port": port,
+        "user": (secret("SMTP_USER") or "").strip(),
+        "password": secret("SMTP_PASSWORD") or "",
+        "from": sender.strip(),
+    }
+
+
+def cloud_config_problem() -> str | None:
+    if not on_streamlit_cloud():
+        return None
+    if not secret("DATABASE_URL"):
+        return (
+            "This app is on Streamlit Cloud without DATABASE_URL. "
+            "Add the Neon connection string in secrets, save, and reboot. "
+            "Accounts are not kept on the Cloud machine."
+        )
+    if not secret("AUTH_COOKIE_SECRET"):
+        return (
+            "Add AUTH_COOKIE_SECRET in Streamlit secrets, save, and reboot. "
+            "Without it, password sign-in is tied to a file that disappears on restart."
+        )
+    return None
+
+
+def neon_direct_connection() -> bool:
+    raw = secret("DATABASE_URL") or ""
+    return ".neon.tech" in raw and "-pooler" not in raw
+
+
 def auth_cookie_secret_is_configured() -> bool:
     return bool(secret("AUTH_COOKIE_SECRET"))
 

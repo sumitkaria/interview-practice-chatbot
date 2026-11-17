@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import html
+import json
 import secrets
 from datetime import timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from interview_app import auth, config, db, files, grok_client, prompts
+from interview_app import auth, config, db, files, grok_client, mailer, prompts
 from interview_app.components import interview_voice, session_bridge
 
 MAX_ANSWER_SECONDS = 180
@@ -32,7 +34,18 @@ _VIEW_KEYS = {
     "resume_upload_sig_error",
     "confirm_restart",
     "just_saved",
+    "history_limit",
+    "job_file_id",
+    "resume_file_id",
+    "storage_note",
 }
+
+
+PRIVACY_NOTE = (
+    "Your résumé and the job description are saved for your account and sent to xAI "
+    "when a file is read or the interviewer replies. The microphone recording stays in this browser. "
+    "You can download your data or delete the account from Account."
+)
 
 
 def main() -> None:
@@ -47,6 +60,11 @@ def main() -> None:
         st.caption(safe_db_message(exc))
         st.stop()
 
+    problem = config.cloud_config_problem()
+    if problem:
+        st.error(problem)
+        st.stop()
+
     if st.session_state.get("logged_out") and st.session_state.get("want_google_logout"):
         nonce = str(st.session_state.get("logout_nonce") or "")
         result = session_bridge(action="clear", nonce=nonce)
@@ -56,12 +74,17 @@ def main() -> None:
         st.stop()
 
     render_session_cookie()
+    consume_verification()
     user = current_user()
+    db.set_actor(user.id if user else None)
     if user is None:
         cloud_storage_notice()
         render_login()
         return
-    render_app(user)
+    try:
+        render_app(user)
+    except db.NotOwner:
+        st.error("That interview is not on this account.")
 
 
 BRAND = """
@@ -333,7 +356,7 @@ def current_user():
     user_id = st.session_state.get("auth_user_id")
     if not user_id:
         token = read_cookie()
-        user_id = auth.read_session_token(token, config.auth_cookie_secret()) if token else None
+        user_id = auth.authenticated_user_id(token, config.auth_cookie_secret()) if token else None
         if user_id:
             st.session_state.auth_user_id = user_id
     if not user_id:
@@ -361,6 +384,9 @@ def remember_user(user_id: str) -> None:
 
 
 def request_logout() -> None:
+    token = read_cookie() or str(st.session_state.get("pending_cookie") or "")
+    if token:
+        auth.revoke_session_token(token, config.auth_cookie_secret())
     st.session_state.logged_out = True
     st.session_state.want_google_logout = google_identity() is not None
     st.session_state.logout_nonce = secrets.token_hex(8)
@@ -370,9 +396,35 @@ def request_logout() -> None:
     st.rerun()
 
 
+def query_value(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+    except Exception:
+        return ""
+    if isinstance(value, list):
+        return str(value[0] if value else "")
+    return str(value or "")
+
+
+def consume_verification() -> None:
+    token = query_value("verify")
+    if not token:
+        return
+    if auth.confirm_verification(token):
+        st.success("Email confirmed.")
+    else:
+        st.warning("That confirmation link has expired.")
+    try:
+        del st.query_params["verify"]
+    except Exception:
+        pass
+
+
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
     st.caption("Your résumé and the role stay with your account.")
+    st.caption(PRIVACY_NOTE)
+    render_password_reset()
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
             try:
@@ -398,6 +450,7 @@ def render_login() -> None:
             "Create account" if mode == "Create account" else "Log in",
             use_container_width=True,
         )
+    render_about()
     if not submitted:
         return
     try:
@@ -406,6 +459,10 @@ def render_login() -> None:
                 st.error("Those passwords do not match.")
                 return
             user = auth.register_user(name, email, password)
+            try:
+                auth.send_verification(user)
+            except Exception:
+                st.caption("The account is ready. The confirmation email could not be sent.")
         else:
             user = auth.login_user(email, password)
     except auth.AuthError as exc:
@@ -414,8 +471,68 @@ def render_login() -> None:
     st.session_state.logged_out = False
     st.session_state.want_google_logout = False
     st.session_state.auth_user_id = user.id
-    st.session_state.pending_cookie = auth.make_session_token(user.id, config.auth_cookie_secret())
+    st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
     st.rerun()
+
+
+def render_password_reset() -> None:
+    token = query_value("reset")
+    if token:
+        st.subheader("Choose a new password")
+        with st.form("reset-password"):
+            password = st.text_input("New password", type="password")
+            confirm = st.text_input("Confirm new password", type="password")
+            submitted = st.form_submit_button("Update password")
+        if submitted:
+            if password != confirm:
+                st.error("Those passwords do not match.")
+            else:
+                try:
+                    auth.reset_password(token, password)
+                except auth.AuthError as exc:
+                    st.error(str(exc))
+                else:
+                    try:
+                        del st.query_params["reset"]
+                    except Exception:
+                        pass
+                    st.success("Password updated. Log in with the new one.")
+    if mailer.configured():
+        with st.expander("Forgot password"):
+            with st.form("forgot-password"):
+                reset_email = st.text_input("Email for a reset link")
+                send = st.form_submit_button("Email a reset link")
+            if send:
+                try:
+                    auth.request_password_reset(reset_email)
+                except auth.AuthError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("The email could not be sent.")
+                else:
+                    st.success("If that email has a password account, a reset link is on its way.")
+    else:
+        st.caption("Password reset by email is not set up. After you sign in, change the password from Account.")
+
+
+def render_about() -> None:
+    with st.expander("About this app"):
+        st.write(
+            "Interview Practice is a private rehearsal. You add a job and a résumé, "
+            "then speak or type through one interview at a time."
+        )
+        st.write(PRIVACY_NOTE)
+        st.write(
+            "The app runs at "
+            + config.public_app_url()
+            + ". To use your own domain, add it in Streamlit Cloud, set PUBLIC_APP_URL to that address, "
+            "and add the same address with /oauth2callback to the Google sign-in client."
+        )
+        st.write(
+            "Download your data from Account for a copy you keep. "
+            "Turn on backups in the Neon project for the whole database. This app cannot do that itself. "
+            "If many people practice at once, use Neon’s pooled connection string, the one whose host contains -pooler."
+        )
 
 
 def render_app(user: db.UserRecord) -> None:
@@ -469,7 +586,13 @@ def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None, state=N
             state[widget_key] = value
             state[durable_key] = value
             state[source_key] = getattr(profile, source_key) if profile else ""
+        state["job_file_id"] = profile.job_file_id if profile else ""
+        state["resume_file_id"] = profile.resume_file_id if profile else ""
         return
+    if "job_file_id" not in state:
+        state["job_file_id"] = profile.job_file_id if profile else ""
+    if "resume_file_id" not in state:
+        state["resume_file_id"] = profile.resume_file_id if profile else ""
     for widget_key, durable_key, attr, _source_key in _DRAFT_FIELDS:
         if durable_key not in state:
             state[durable_key] = getattr(profile, attr) if profile else ""
@@ -566,6 +689,13 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         "</div>",
         unsafe_allow_html=True,
     )
+    offer_download(user.id, str(st.session_state.get("job_file_id") or ""), "Download job file", f"dl_job_{user.id}")
+    offer_download(
+        user.id,
+        str(st.session_state.get("resume_file_id") or ""),
+        "Download résumé file",
+        f"dl_resume_{user.id}",
+    )
     render_sidebar_editor(
         user,
         upload_label="Update job description",
@@ -584,9 +714,19 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
     )
+    st.caption(PRIVACY_NOTE)
+    note = st.session_state.get("storage_note")
+    if note:
+        st.caption(note)
+    render_account(user)
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()
+    if config.neon_direct_connection():
+        st.caption(
+            "The database is on a direct Neon address. "
+            "The pooled address, whose host contains -pooler, fits more people practicing at once."
+        )
     if config.uses_local_sqlite() and not config.on_streamlit_cloud():
         st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
     st.markdown("<div class='sidebar-history-anchor'></div>", unsafe_allow_html=True)
@@ -626,7 +766,9 @@ def render_sidebar_editor(
 
 
 def render_interview_history(user_id: str) -> None:
-    interviews = db.list_interviews(user_id)
+    shown = int(st.session_state.get("history_limit", 20))
+    interviews = db.list_interviews(user_id, limit=shown)
+    total = db.count_interviews(user_id)
     if not interviews:
         st.caption("No interviews yet.")
         return
@@ -643,11 +785,77 @@ def render_interview_history(user_id: str) -> None:
             st.session_state.selected_interview_id = interview.id
             st.session_state.confirm_restart = False
             st.rerun()
+    if total > len(interviews):
+        if st.button(f"Earlier interviews ({total - len(interviews)} more)", key="earlier_interviews"):
+            st.session_state.history_limit = shown + 20
+            st.rerun()
+
+
+def offer_download(user_id: str, file_id: str, label: str, key: str) -> None:
+    found = db.read_file(file_id, user_id) if file_id else None
+    if not found:
+        return
+    name, data = found
+    st.download_button(label, data=data, file_name=name, key=key)
+
+
+def render_account(user: db.UserRecord) -> None:
+    if st.session_state.pop("password_updated", False):
+        st.success("Password updated. Other sessions were signed out.")
+    used, limit, calls, call_limit = db.usage_today(user.id)
+    st.caption(f"{used} of {limit} interviews started today. {calls} of {call_limit} interviewer replies.")
+    if mailer.configured() and user.password_hash and user.email_verified_at is None:
+        st.caption("This email is not confirmed yet.")
+        if st.button("Send confirmation email", key="resend_verify"):
+            try:
+                auth.send_verification(user)
+                st.success("Confirmation email sent.")
+            except Exception:
+                st.error("The email could not be sent.")
+    with st.expander("Account"):
+        export = db.export_account(user.id)
+        st.download_button(
+            "Download my data",
+            data=json.dumps(export, indent=2).encode("utf-8"),
+            file_name="interview-practice.json",
+            mime="application/json",
+            key=f"export_{user.id}",
+        )
+        if user.password_hash:
+            with st.form("change-password"):
+                current = st.text_input("Current password", type="password")
+                new_password = st.text_input("New password", type="password")
+                change = st.form_submit_button("Change password")
+            if change:
+                try:
+                    auth.change_password(user.id, current, new_password)
+                except auth.AuthError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
+                    st.session_state.password_updated = True
+                    st.rerun()
+        st.caption("Deleting the account removes the résumé, interviews, and stored files.")
+        confirm = st.text_input("Type your email to delete the account", key=f"delete_email_{user.id}")
+        if st.button("Delete account", key=f"delete_{user.id}"):
+            if confirm.strip().lower() != user.email:
+                st.error("Type the account email to confirm.")
+            else:
+                db.delete_account(user.id)
+                request_logout()
+        if config.is_admin(user.email):
+            st.markdown("**Recent problems**")
+            events = db.recent_events("error", limit=20)
+            if not events:
+                st.caption("No recorded problems.")
+            for created, owner, message in events:
+                when = created.strftime("%b %d %H:%M") if created else ""
+                st.caption(f"{when} · {owner or 'system'} · {message or 'error'}")
 
 
 def image_reader_for(user_id: str):
     def read(data: bytes, mime: str) -> str:
-        return grok_client.extract_document_text(data, mime, cache_key=user_id)
+        return grok_client.extract_document_text(data, mime, cache_key=user_id, user_id=user_id)
 
     return read
 
@@ -663,10 +871,23 @@ def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader,
         st.session_state[sig_key] = signature
         st.session_state[sig_key + "_error"] = str(exc)
         return
+    kind = "job" if "job" in sig_key else "resume"
+    file_id = ""
+    for item in items:
+        saved_id = db.store_file(user_id, kind, Path(getattr(item, "name", "upload")).name, item.getvalue())
+        if saved_id:
+            file_id = saved_id
     st.session_state[sig_key] = signature
     st.session_state[sig_key + "_error"] = ""
     st.session_state[draft_key] = text
     st.session_state[source_key] = source
+    if file_id:
+        st.session_state[kind + "_file_id"] = file_id
+        st.session_state["storage_note"] = ""
+    else:
+        st.session_state["storage_note"] = (
+            "The text was saved. The original file was not kept because stored files are at the 25 MB limit."
+        )
     autosave_materials(user_id, clear_uploads=True)
     st.rerun()
 
@@ -690,7 +911,15 @@ def autosave_materials(user_id: str, *, clear_uploads: bool = False) -> None:
         and resume_source == profile.resume_source
     )
     if not unchanged:
-        saved = db.save_profile(user_id, job, job_source, resume, resume_source)
+        saved = db.save_profile(
+            user_id,
+            job,
+            job_source,
+            resume,
+            resume_source,
+            job_file_id=state.get("job_file_id") if "job_file_id" in state else None,
+            resume_file_id=state.get("resume_file_id") if "resume_file_id" in state else None,
+        )
         state["draft_marker"] = user_id + ":" + saved.updated_at.isoformat()
         state["job_text"] = job
         state["resume_text"] = resume
@@ -741,7 +970,7 @@ def render_practice(
     if interview is None:
         render_start(user, profile)
         return
-    render_session_files(interview)
+    render_session_files(user.id, interview)
     if interview.status == "active" and st.session_state.get("interview_saved_id") != interview.id:
         render_active(interview)
         return
@@ -754,7 +983,7 @@ def render_practice(
     render_start(user, profile)
 
 
-def render_session_files(interview: db.InterviewRecord) -> None:
+def render_session_files(user_id: str, interview: db.InterviewRecord) -> None:
     job = uploaded_name(interview.job_source, interview.job_description, "Pasted job description")
     resume = uploaded_name(interview.resume_source, interview.resume_text, "Pasted résumé")
     st.markdown(
@@ -765,6 +994,8 @@ def render_session_files(interview: db.InterviewRecord) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+    offer_download(user_id, interview.job_file_id, "Download job file", f"dl_session_job_{interview.id}")
+    offer_download(user_id, interview.resume_file_id, "Download résumé file", f"dl_session_resume_{interview.id}")
 
 
 def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
@@ -779,6 +1010,10 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
     if not config.xai_api_key():
         st.error(str(grok_client.GrokNotConfigured()))
         return
+    used, limit, _calls, _call_limit = db.usage_today(user.id)
+    if used >= limit:
+        st.info(f"This account has started {limit} interviews today. The allowance resets overnight.")
+        return
     if st.button("Begin interview", type="primary"):
         try:
             with st.spinner("Preparing your interviewer…"):
@@ -786,6 +1021,7 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                     profile.job_description,
                     profile.resume_text,
                     cache_key=user.id,
+                    user_id=user.id,
                 )
             created = db.create_interview(
                 user.id,
@@ -799,8 +1035,13 @@ def render_start(user: db.UserRecord, profile: db.ProfileRecord) -> None:
                 job_source=profile.job_source,
                 resume_source=profile.resume_source,
                 role_brief=script.role_brief,
+                job_file_id=profile.job_file_id,
+                resume_file_id=profile.resume_file_id,
             )
             st.session_state.selected_interview_id = created.id
+        except db.QuotaExceeded as exc:
+            st.error(str(exc))
+            return
         except grok_client.GrokError as exc:
             st.error(str(exc))
             return
@@ -962,6 +1203,7 @@ def render_small_talk(interview: db.InterviewRecord) -> None:
         reply = grok_client.continue_small_talk(
             history=history,
             cache_key=interview.id,
+            user_id=interview.user_id,
         )
     except grok_client.GrokError:
         reply = "Glad to hear it."
@@ -1085,6 +1327,7 @@ def capture_answer(interview: db.InterviewRecord, index: int, question: str) -> 
                 transcript=pending["transcript"],
                 prior=prior,
                 cache_key=interview.id,
+                user_id=interview.user_id,
             )
         db.save_turn(
             interview.id,
@@ -1222,6 +1465,7 @@ def capture_candidate_question(interview: db.InterviewRecord, index: int, prompt
                 interviewer_name=interview.interviewer_name,
                 interviewer_title=interview.interviewer_title,
                 cache_key=interview.id,
+                user_id=interview.user_id,
             )
         db.save_turn(
             interview.id,
