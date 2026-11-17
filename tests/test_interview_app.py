@@ -283,6 +283,31 @@ def test_claude_reads_document_images(monkeypatch):
     assert content[1]["type"] == "text"
 
 
+def test_account_can_choose_model_and_effort(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
+    user = auth.register_user("Sumit", "model@example.com", "correct horse")
+    assert db.model_settings(user.id) == ("claude-sonnet-5-5", "low")
+    assert [item[0] for item in config.model_options()] == [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+    ]
+    assert [item[0] for item in config.effort_options()] == ["low", "medium", "high", "xhigh", "max"]
+
+    db.save_model_settings(user.id, "claude-opus-5-5", "high")
+    client = FakeClient('{"questions": ["What did you ship?"]}')
+    claude_client.generate_questions("job", "resume", cache_key=user.id, client=client, user_id=user.id)
+    assert client.messages.kwargs["model"] == "claude-opus-5-5"
+    assert client.messages.kwargs["output_config"] == {"effort": "high"}
+
+    db.save_model_settings(user.id, "not-a-model", "nope")
+    assert db.model_settings(user.id) == ("claude-sonnet-5-5", "low")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-custom")
+    assert "claude-custom" in {item[0] for item in config.model_options()}
+
+
 def test_missing_claude_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)

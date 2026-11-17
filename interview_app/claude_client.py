@@ -85,8 +85,9 @@ def complete(
                 db.charge_model_call(user_id)
             except db.QuotaExceeded as exc:
                 raise ClaudeError(str(exc)) from exc
+        model, effort = db.model_settings(user_id) if user_id else (config.claude_model(), config.claude_effort())
         response = claude.messages.create(
-            model=config.claude_model(),
+            model=model,
             max_tokens=max_output_tokens,
             system=[
                 {
@@ -96,7 +97,7 @@ def complete(
                 }
             ],
             messages=[{"role": "user", "content": user_content}],
-            output_config={"effort": config.claude_effort()},
+            output_config={"effort": effort},
             metadata={"user_id": cache_key[:256]},
         )
     except AuthenticationError as exc:
