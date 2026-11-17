@@ -1,4 +1,4 @@
-"""Grok requests for questions, coaching, and image text."""
+"""Claude requests for questions, coaching, and image text."""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import base64
 import json
 import threading
 
-import httpx
-from openai import APIConnectionError, APIStatusError, AuthenticationError, OpenAI, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, Anthropic, AuthenticationError, RateLimitError
 
 from interview_app import config, db, prompts
 
 _MODEL_SLOTS = threading.BoundedSemaphore(2)
 
-class GrokError(Exception):
-    """A Grok request could not be completed."""
+
+class ClaudeError(Exception):
+    """A Claude request could not be completed."""
 
 
-class GrokNotConfigured(GrokError):
+class ClaudeNotConfigured(ClaudeError):
     """No AI key is available."""
 
     def __init__(self, message: str | None = None) -> None:
@@ -28,17 +28,16 @@ class GrokNotConfigured(GrokError):
 
 
 def require_api_key() -> str:
-    key = config.xai_api_key()
+    key = config.anthropic_api_key()
     if not key:
-        raise GrokNotConfigured()
+        raise ClaudeNotConfigured()
     return key
 
 
-def build_client(api_key: str | None = None) -> OpenAI:
-    return OpenAI(
+def build_client(api_key: str | None = None) -> Anthropic:
+    return Anthropic(
         api_key=api_key or require_api_key(),
-        base_url=config.XAI_BASE_URL,
-        timeout=httpx.Timeout(180.0),
+        timeout=180.0,
     )
 
 
@@ -50,20 +49,21 @@ def _sanitize(exc: Exception, api_key: str) -> str:
 
 
 def response_text(response) -> str:
-    text = getattr(response, "output_text", None)
-    if isinstance(text, str) and text.strip():
-        return text
     chunks: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        if getattr(item, "type", None) not in {None, "message"}:
-            continue
-        for part in getattr(item, "content", None) or []:
-            value = getattr(part, "text", None)
-            if value:
-                chunks.append(value)
+    for block in getattr(response, "content", None) or []:
+        if isinstance(block, dict):
+            if block.get("type") not in {None, "text"}:
+                continue
+            value = block.get("text")
+        else:
+            if getattr(block, "type", None) not in {None, "text"}:
+                continue
+            value = getattr(block, "text", None)
+        if value:
+            chunks.append(value)
     if chunks:
         return "\n".join(chunks)
-    raise GrokError("The AI interviewer returned an empty response. Try again.")
+    raise ClaudeError("The AI interviewer returned an empty response. Try again.")
 
 
 def complete(
@@ -77,44 +77,47 @@ def complete(
 ) -> str:
     api_key = require_api_key()
     if not _MODEL_SLOTS.acquire(timeout=8):
-        raise GrokError("The interviewer is with someone else right now. Wait a moment and try again.")
-    grok = client or build_client(api_key)
+        raise ClaudeError("The interviewer is with someone else right now. Wait a moment and try again.")
+    claude = client or build_client(api_key)
     try:
         if user_id:
             try:
                 db.charge_model_call(user_id)
             except db.QuotaExceeded as exc:
-                raise GrokError(str(exc)) from exc
-        response = grok.responses.create(
-            model=config.grok_model(),
-            reasoning={"effort": config.grok_effort()},
-            store=False,
-            max_output_tokens=max_output_tokens,
-            prompt_cache_key=cache_key,
-            input=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": user_content},
+                raise ClaudeError(str(exc)) from exc
+        response = claude.messages.create(
+            model=config.claude_model(),
+            max_tokens=max_output_tokens,
+            system=[
+                {
+                    "type": "text",
+                    "text": instructions,
+                    "cache_control": {"type": "ephemeral"},
+                }
             ],
+            messages=[{"role": "user", "content": user_content}],
+            output_config={"effort": config.claude_effort()},
+            metadata={"user_id": cache_key[:256]},
         )
     except AuthenticationError as exc:
         _remember_model_error(user_id, "The AI key was rejected.")
-        raise GrokError("The AI interviewer could not sign in. Try again in a moment.") from exc
+        raise ClaudeError("The AI interviewer could not sign in. Try again in a moment.") from exc
     except RateLimitError as exc:
         _remember_model_error(user_id, "The AI interviewer is rate limited or out of credits.")
-        raise GrokError("The AI interviewer is busy right now. Try again in a moment.") from exc
+        raise ClaudeError("The AI interviewer is busy right now. Try again in a moment.") from exc
     except APIStatusError as exc:
         _remember_model_error(user_id, f"The AI interviewer returned {exc.status_code}.")
         if exc.status_code in {402, 403}:
-            raise GrokError("The AI interviewer could not answer. Try again in a moment.") from exc
-        raise GrokError(f"The AI interviewer returned an error ({exc.status_code}). {_sanitize(exc, api_key)}") from exc
+            raise ClaudeError("The AI interviewer could not answer. Try again in a moment.") from exc
+        raise ClaudeError(f"The AI interviewer returned an error ({exc.status_code}). {_sanitize(exc, api_key)}") from exc
     except APIConnectionError as exc:
         _remember_model_error(user_id, "Could not reach the AI interviewer.")
-        raise GrokError("Could not reach the AI interviewer. Try again.") from exc
-    except GrokError:
+        raise ClaudeError("Could not reach the AI interviewer. Try again.") from exc
+    except ClaudeError:
         raise
     except Exception as exc:
         _remember_model_error(user_id, _sanitize(exc, api_key))
-        raise GrokError(f"The AI interviewer could not complete that request. {_sanitize(exc, api_key)}") from exc
+        raise ClaudeError(f"The AI interviewer could not complete that request. {_sanitize(exc, api_key)}") from exc
     finally:
         _MODEL_SLOTS.release()
     return response_text(response)
@@ -144,7 +147,7 @@ def generate_questions(
     try:
         return prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise GrokError("The AI interviewer did not return questions. Try again.") from exc
+        raise ClaudeError("The AI interviewer did not return questions. Try again.") from exc
 
 
 def coach_answer(
@@ -172,7 +175,7 @@ def coach_answer(
     except (ValueError, TypeError, json.JSONDecodeError):
         cleaned = raw.strip()
         if not cleaned:
-            raise GrokError("The AI interviewer returned an empty answer. Try again.")
+            raise ClaudeError("The AI interviewer returned an empty answer. Try again.")
         return cleaned, "That already has a clear point. Next time, add the result in one sentence.", ""
 
 
@@ -232,13 +235,13 @@ def answer_candidate_question(
     except (ValueError, TypeError, json.JSONDecodeError):
         reply = raw.strip()
         if not reply:
-            raise GrokError("The AI interviewer returned an empty answer. Try again.")
+            raise ClaudeError("The AI interviewer returned an empty answer. Try again.")
         return reply
     reply = ""
     if isinstance(payload, dict):
         reply = str(payload.get("reply") or payload.get("answer") or "").strip()
     if not reply:
-        raise GrokError("The AI interviewer returned an empty answer. Try again.")
+        raise ClaudeError("The AI interviewer returned an empty answer. Try again.")
     return reply
 
 
@@ -253,11 +256,14 @@ def extract_document_text(
     encoded = base64.b64encode(data).decode("ascii")
     content = [
         {
-            "type": "input_image",
-            "image_url": f"data:{mime};base64,{encoded}",
-            "detail": "high",
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": encoded,
+            },
         },
-        {"type": "input_text", "text": prompts.IMAGE_INSTRUCTIONS},
+        {"type": "text", "text": prompts.IMAGE_INSTRUCTIONS},
     ]
     text = complete(
         "You extract text from document images.",
@@ -269,5 +275,5 @@ def extract_document_text(
     )
     cleaned = text.strip()
     if not cleaned:
-        raise GrokError("The AI interviewer could not read that image. Paste the text instead.")
+        raise ClaudeError("The AI interviewer could not read that image. Paste the text instead.")
     return cleaned

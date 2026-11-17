@@ -11,10 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL = "grok-4.7"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "low"
-ALLOWED_EFFORTS = {"low", "medium", "high", "xhigh"}
-XAI_BASE_URL = "https://api.x.ai/v1"
+ALLOWED_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
 
 def secret(name: str, default: str | None = None) -> str | None:
@@ -33,18 +32,18 @@ def secret(name: str, default: str | None = None) -> str | None:
     return default
 
 
-def xai_api_key() -> str | None:
-    key = secret("XAI_API_KEY")
+def anthropic_api_key() -> str | None:
+    key = secret("ANTHROPIC_API_KEY")
     return key.strip() if key else None
 
 
-def grok_model() -> str:
-    model = secret("GROK_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+def claude_model() -> str:
+    model = secret("CLAUDE_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
     return model.strip() or DEFAULT_MODEL
 
 
-def grok_effort() -> str:
-    effort = (secret("GROK_REASONING_EFFORT", DEFAULT_EFFORT) or DEFAULT_EFFORT).strip().lower()
+def claude_effort() -> str:
+    effort = (secret("CLAUDE_EFFORT", DEFAULT_EFFORT) or DEFAULT_EFFORT).strip().lower()
     if effort not in ALLOWED_EFFORTS:
         return DEFAULT_EFFORT
     return effort
