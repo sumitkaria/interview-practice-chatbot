@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import json
 import secrets
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -38,6 +38,8 @@ _VIEW_KEYS = {
     "job_file_id",
     "resume_file_id",
     "storage_note",
+    "materials_restored",
+    "materials_repair_checked",
 }
 
 
@@ -527,6 +529,13 @@ def render_about() -> None:
 
 def render_app(user: db.UserRecord) -> None:
     profile = db.get_profile(user.id)
+    missing = profile is None or not profile.job_description.strip() or not profile.resume_text.strip()
+    if missing and st.session_state.get("materials_repair_checked") != user.id:
+        repaired = repair_saved_materials(user.id, profile)
+        st.session_state["materials_repair_checked"] = user.id
+        if _materials_were_restored(profile, repaired):
+            st.session_state["materials_restored"] = True
+        profile = repaired
     ensure_drafts(user, profile)
     rail, stage = st.columns([1, 1.65], gap="medium")
     with rail:
@@ -565,6 +574,7 @@ def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None, state=N
 
     The text boxes use widget keys. Streamlit removes those keys when Practice
     is showing, so a second copy is kept under a key that is not a widget.
+    A blank box must not replace text that is already saved on the account.
     """
     state = st.session_state if state is None else state
     remember_drafts(state)
@@ -579,19 +589,31 @@ def ensure_drafts(user: db.UserRecord, profile: db.ProfileRecord | None, state=N
         state["job_file_id"] = profile.job_file_id if profile else ""
         state["resume_file_id"] = profile.resume_file_id if profile else ""
         return
-    if "job_file_id" not in state:
-        state["job_file_id"] = profile.job_file_id if profile else ""
-    if "resume_file_id" not in state:
-        state["resume_file_id"] = profile.resume_file_id if profile else ""
-    for widget_key, durable_key, attr, _source_key in _DRAFT_FIELDS:
-        if durable_key not in state:
-            state[durable_key] = getattr(profile, attr) if profile else ""
+    if not state.get("job_file_id") and profile and profile.job_file_id:
+        state["job_file_id"] = profile.job_file_id
+    if not state.get("resume_file_id") and profile and profile.resume_file_id:
+        state["resume_file_id"] = profile.resume_file_id
+    for widget_key, durable_key, attr, source_key in _DRAFT_FIELDS:
+        saved = getattr(profile, attr) if profile else ""
+        if not str(state.get(durable_key) or "").strip() and saved.strip():
+            state[durable_key] = saved
+        if widget_key not in state or (
+            not str(state.get(widget_key) or "").strip() and str(state.get(durable_key) or "").strip()
+        ):
+            state[widget_key] = state.get(durable_key) or ""
+        if not str(state.get(source_key) or "").strip() and profile:
+            saved_source = getattr(profile, source_key) or ""
+            if saved_source:
+                state[source_key] = saved_source
 
 
 def remember_drafts(state) -> None:
     for widget_key, durable_key, _attr, _source_key in _DRAFT_FIELDS:
-        if widget_key in state:
-            state[durable_key] = state.get(widget_key) or ""
+        if widget_key not in state:
+            continue
+        typed = state.get(widget_key) or ""
+        if typed.strip() or not str(state.get(durable_key) or "").strip():
+            state[durable_key] = typed
 
 
 def restore_draft_widgets(state) -> None:
@@ -704,6 +726,8 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
     )
+    if st.session_state.pop("materials_restored", False):
+        st.caption("Your job description and résumé are back on this account.")
     note = st.session_state.get("storage_note")
     if note:
         st.caption(note)
@@ -876,23 +900,158 @@ def apply_upload(uploads, sig_key: str, draft_key: str, source_key: str, reader,
     st.rerun()
 
 
-def autosave_materials(user_id: str, *, clear_uploads: bool = False) -> None:
-    state = st.session_state
-    job = files.truncate(current_draft(state, "job_draft"))
-    resume = files.truncate(current_draft(state, "resume_draft"))
+def _kept_material(state, widget_key: str, durable_key: str, saved: str) -> str:
+    """Keep saved text when the editor is blank because the page did not load it."""
+    saved = saved or ""
+    typed = files.truncate(state.get(widget_key) or "") if widget_key in state else ""
+    if typed.strip():
+        state[durable_key] = typed
+        return typed
+    durable = files.truncate(state.get(durable_key) or "") if durable_key in state else ""
+    chosen = durable if durable.strip() else saved
+    if chosen.strip():
+        state[widget_key] = chosen
+        state[durable_key] = chosen
+    return chosen
+
+
+def _kept_label(state, source_key: str, saved_source: str, text: str, saved_text: str) -> str:
+    source = str(state.get(source_key) or "")
+    if text == (saved_text or ""):
+        return saved_source or source
+    return source or saved_source
+
+
+def _stamp(value) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _text_from_stored_file(user_id: str, file_id: str) -> str:
+    found = db.read_file(file_id, user_id)
+    if not found:
+        return ""
+    name, data = found
+    try:
+        return files.truncate(files.extract_named_bytes(name, data, None))
+    except Exception:
+        return ""
+
+
+def _recover_side(
+    user_id: str,
+    text: str,
+    source: str,
+    file_id: str,
+    interview: db.InterviewRecord | None,
+    stored: db.StoredFileInfo | None,
+    interview_text: str,
+    interview_source: str,
+    interview_file_id: str,
+) -> tuple[str, str, str]:
+    if text.strip():
+        return text, source, file_id
+    choices: list[tuple[datetime, str, str, str]] = []
+    if interview is not None and interview_text.strip():
+        choices.append((_stamp(interview.created_at), interview_text, interview_source, interview_file_id))
+    if stored is not None:
+        extracted = _text_from_stored_file(user_id, stored.id)
+        if extracted.strip():
+            choices.append((_stamp(stored.created_at), extracted, stored.filename, stored.id))
+    if not choices:
+        return text, source, file_id
+    _when, recovered_text, recovered_source, recovered_file = max(choices, key=lambda item: item[0])
+    return recovered_text, recovered_source or source, recovered_file or file_id
+
+
+def repair_saved_materials(user_id: str, profile: db.ProfileRecord | None) -> db.ProfileRecord | None:
+    """Put back a job description or résumé that a blank editor saved over."""
+    job = profile.job_description if profile else ""
+    resume = profile.resume_text if profile else ""
+    if job.strip() and resume.strip():
+        return profile
+    interview = db.newest_interview_with_materials(user_id)
+    job, job_source, job_file_id = _recover_side(
+        user_id,
+        job,
+        profile.job_source if profile else "",
+        profile.job_file_id if profile else "",
+        interview,
+        db.newest_stored_file(user_id, "job"),
+        interview.job_description if interview else "",
+        interview.job_source if interview else "",
+        interview.job_file_id if interview else "",
+    )
+    resume, resume_source, resume_file_id = _recover_side(
+        user_id,
+        resume,
+        profile.resume_source if profile else "",
+        profile.resume_file_id if profile else "",
+        interview,
+        db.newest_stored_file(user_id, "resume"),
+        interview.resume_text if interview else "",
+        interview.resume_source if interview else "",
+        interview.resume_file_id if interview else "",
+    )
+    if profile is not None and job == profile.job_description and resume == profile.resume_text:
+        return profile
+    if not job.strip() and not resume.strip():
+        return profile
+    return db.save_profile(
+        user_id,
+        job,
+        job_source,
+        resume,
+        resume_source,
+        job_file_id=job_file_id or None,
+        resume_file_id=resume_file_id or None,
+    )
+
+
+def _materials_were_restored(before: db.ProfileRecord | None, after: db.ProfileRecord | None) -> bool:
+    if after is None:
+        return False
+    before_job = before.job_description.strip() if before else ""
+    before_resume = before.resume_text.strip() if before else ""
+    return (not before_job and bool(after.job_description.strip())) or (
+        not before_resume and bool(after.resume_text.strip())
+    )
+
+
+def autosave_materials(user_id: str, *, clear_uploads: bool = False, state=None) -> None:
+    state = st.session_state if state is None else state
     profile = db.get_profile(user_id)
-    job_source = state.get("job_source") or (profile.job_source if profile else "")
-    resume_source = state.get("resume_source") or (profile.resume_source if profile else "")
+    job = _kept_material(state, "job_draft", "job_text", profile.job_description if profile else "")
+    resume = _kept_material(state, "resume_draft", "resume_text", profile.resume_text if profile else "")
+    job_source = _kept_label(state, "job_source", profile.job_source if profile else "", job, profile.job_description if profile else "")
+    resume_source = _kept_label(
+        state,
+        "resume_source",
+        profile.resume_source if profile else "",
+        resume,
+        profile.resume_text if profile else "",
+    )
     if not job_source and job:
         job_source = "Pasted text"
     if not resume_source and resume:
         resume_source = "Pasted text"
+    if not job.strip() and not resume.strip():
+        return
+    job_file_id = state.get("job_file_id") or None
+    resume_file_id = state.get("resume_file_id") or None
+    if job == (profile.job_description if profile else "") and not job_file_id and profile:
+        job_file_id = profile.job_file_id or None
+    if resume == (profile.resume_text if profile else "") and not resume_file_id and profile:
+        resume_file_id = profile.resume_file_id or None
     unchanged = (
         profile is not None
         and job == profile.job_description
         and resume == profile.resume_text
         and job_source == profile.job_source
         and resume_source == profile.resume_source
+        and (job_file_id or "") == (profile.job_file_id or "")
+        and (resume_file_id or "") == (profile.resume_file_id or "")
     )
     if not unchanged:
         saved = db.save_profile(
@@ -901,14 +1060,20 @@ def autosave_materials(user_id: str, *, clear_uploads: bool = False) -> None:
             job_source,
             resume,
             resume_source,
-            job_file_id=state.get("job_file_id") if "job_file_id" in state else None,
-            resume_file_id=state.get("resume_file_id") if "resume_file_id" in state else None,
+            job_file_id=job_file_id,
+            resume_file_id=resume_file_id,
         )
         state["draft_marker"] = user_id + ":" + saved.updated_at.isoformat()
         state["job_text"] = job
         state["resume_text"] = resume
+        state["job_draft"] = job
+        state["resume_draft"] = resume
         state["job_source"] = job_source
         state["resume_source"] = resume_source
+        if job_file_id:
+            state["job_file_id"] = job_file_id
+        if resume_file_id:
+            state["resume_file_id"] = resume_file_id
     if clear_uploads:
         state["upload_nonce"] = int(state.get("upload_nonce", 0)) + 1
         state["job_upload_sig"] = ()
