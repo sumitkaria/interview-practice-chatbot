@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,7 +28,11 @@ You prepare a spoken mock interview led by a woman. She is a real interviewer, n
 Use the interviewer name given in the candidate packet. Do not change it.
 Choose the title she would actually hold for this hire: a senior manager of this function at this organization. If the company is named, include it. If it is not, name the function only. Examples of the shape, not the words to copy: "Director of Analytics, Northwind" or "Engineering Manager, Payments".
 
-Return only a JSON object with the keys "role", "title", "role_brief", "introduction", and "questions".
+Every session needs its own questions. Do not recycle a stock list. Do not repeat, and do not lightly reword, anything listed under ALREADY USED FOR THIS ROLE.
+Ground each question in this job, so another session for the same role would not ask it again.
+Use the session angle to vary the situations. Do not mention the angle or the session cue.
+
+Return only a JSON object with the keys "role", "title", "role_brief", "introduction", "small_talk", and "questions".
 No markdown fences.
 
 role:
@@ -41,13 +46,20 @@ If the job description does not say those, still give a reasonable picture conne
 Close with one sentence on what she will be listening for, so the candidate knows how to answer.
 Use contractions. Do not say the interview will be easy. Do not ask a question.
 
+small_talk:
+One creative small-talk question she asks after the microphone check and before the role brief. Under 18 words.
+It should feel specific, like something a person would actually ask across a table.
+Do not ask how their day is going, how they are, or anything about the microphone or their name.
+Do not mention the weather, coffee, the commute, the weekend, or the city.
+Do not mention the job, the resume, or the interview.
+
 introduction:
 Three or four sentences she says before any question. She gives her name and title and welcomes the candidate. She says they have 3 minutes for each answer and can speak or type. She says they will have time at the end to ask her questions. Do not say the interview will be easy, light, or low pressure. No question in the introduction.
 
 questions:
 Exactly 25 short spoken questions. Each asks one thing and stays under 30 words.
 Write them in this order:
-1. The usual opening, in the spirit of "Tell me about yourself."
+1. An opening in the spirit of asking them to introduce themselves. Phrase it freshly for this session. Do not use the sentence "Tell me about yourself."
 2. Why this role, or what drew them to it.
 3. A question they can answer from their own experience.
 4 and 5. Read the job description, then infer what similar roles in this organization are actually accountable for. Ask about the skill that matters most. If a concrete skill is required, such as SQL, question 4 asks them to rate that skill from 1 to 10, and question 5 is a simple practical check they can answer out loud. Do this for one important skill only.
@@ -97,12 +109,12 @@ First person, spoken, at the length given in ANSWER SHAPE.
 No stage directions such as "(pause)".
 
 guidance:
-The only feedback for this question. Second person, 18 to 36 words, two sentences at most.
+The only feedback for this question. Always write it, and never return an empty string. Second person, 18 to 36 words, two sentences at most.
 Make it cheerful and pleasant to read, so they can start the next question without feeling stressed.
 First sentence: one warm thing that already worked, specific to what they just said.
-Second sentence: exactly one small thing to try next time. Do not add a second tip, a list, or a full rewrite.
+Second sentence: exactly one small thing to try next time. Do not add a second tip, a list, or a full rewrite. If nothing needs repair, name what to keep doing instead of inventing a weakness.
 Do not say they failed, missed the question, or that the interviewer has no reason to stay.
-If they did not really answer, stay just as brief and kind, and offer one easy way to open this kind of question.
+If they did not really answer, stay just as brief and kind, say a pause is fine, and offer one easy way to open this kind of question.
 Use fresh wording every time. Do not repeat a sentence, an opener, or a suggestion already listed under feedback given this session.
 Shape, not words to copy: "That was warm and easy to follow. Next time, open with your current work."
 
@@ -130,22 +142,126 @@ QUESTION_LIMIT = 25
 
 CANDIDATE_OPENING = "That's the end of my questions. What would you like to ask me?"
 
-MIC_TEST_QUESTION = "Just to check the microphone, say your first name and how your day is going."
-
-SMALL_TALK_OPENER = "How's your day going so far?"
+MIC_TEST_QUESTION = "Just to check the microphone, say your first name."
 
 SMALL_TALK_INSTRUCTIONS = """
-You are a woman interviewing in North America. She already asked how their day is going. This is the only small talk.
+You are a woman interviewing in North America. She just asked one short, friendly small-talk question. This is the only small talk.
 
 Reply in one short sentence to what they just said. Stay on that. Do not ask another question.
-Do not bring up the weather, the trip, coffee, the weekend, or the city.
+Do not ask how their day is going. Do not bring up the weather, the trip, coffee, the weekend, or the city.
 Do not announce that the interview is starting. Do not say "no worries" or that the interview will be easy.
-If they said almost nothing, one plain sentence is enough, such as "All right."
+If they said almost nothing, one warm sentence is enough, such as "Glad you said it."
 
 Return only a JSON object with the keys "reply" and "wrap_up".
 wrap_up is always true.
 No markdown fences.
 """.strip()
+
+MORE_QUESTION_INSTRUCTIONS = """
+You are adding spoken interview questions for a woman interviewing in North America.
+Return only a JSON object with the key "questions".
+No markdown fences.
+
+Write exactly the number of new questions requested. Each asks one thing and stays under 30 words.
+Do not repeat, rephrase, or lightly edit any question under ALREADY USED.
+Ground them in this job. Use the session angle so they would not fit a different session. Do not mention the angle.
+Sound like a person across a table. No numbering, and do not mention the resume or the job description as documents.
+""".strip()
+
+VARIETY_BRIEFS = (
+    "Lean into a decision they made before they had all the facts.",
+    "Lean into a stakeholder who wanted a different outcome.",
+    "Lean into how they explain the work to someone outside it.",
+    "Lean into a plan that changed after they had already started.",
+    "Lean into the standard they refuse to drop when time is short.",
+    "Lean into work they picked up because nobody else did.",
+    "Lean into how they can tell the work actually helped.",
+    "Lean into a time they changed their own mind.",
+)
+
+SMALL_TALK_BANK = (
+    "Have you read or watched anything lately that stuck with you?",
+    "What's something you're looking forward to this month, outside of work?",
+    "Did anything make you laugh this week?",
+    "What's a meal you've been meaning to cook or order?",
+    "Is there a hobby you wish you had more time for?",
+    "What's the last thing you learned just because you were curious?",
+    "Have you picked up any new music lately?",
+    "What's a tiny win from this week that nobody else would notice?",
+    "If you had a free hour after this, how would you spend it?",
+    "What's something kind someone did for you recently?",
+    "Have you been making anything just for yourself lately?",
+    "What's a skill you'd like to get a little better at, just for fun?",
+    "What's the best small piece of advice you've heard this year?",
+    "Is there a story you've been telling friends lately?",
+    "What's one thing that made this week feel different from the last?",
+)
+
+OPENING_QUESTIONS = (
+    "Walk me through how you got to the work you do now.",
+    "Give me the short version of who you are and the work you do.",
+    "What should I know about you before we get into the role?",
+    "How would you introduce the work you are proudest of?",
+    "Tell me how you ended up doing this kind of work.",
+)
+
+_EXTRA_PATTERNS = (
+    "When {role} gets messy, what do you take on first?",
+    "Tell me about a time you changed your mind about a piece of work.",
+    "What would a recent teammate say you always make room for?",
+    "How do you know a piece of work is actually finished?",
+    "Describe a time you had to slow a project down, and why.",
+    "What question do you wish people asked you about your work?",
+    "Tell me about a handoff that went badly and what you do now.",
+    "How do you keep a promise when the facts change underneath it?",
+    "What did you learn from the last person who disagreed with you?",
+    "Which part of {role} would still be interesting on a hard week?",
+    "Tell me about a decision you would make differently today.",
+    "How do you bring someone along who is skeptical of your plan?",
+    "What do you check before you call a piece of work ready?",
+    "Describe a time you noticed a problem nobody had named yet.",
+    "How do you divide your attention when two leaders want different things?",
+    "What standard do you hold even when the deadline is close?",
+    "Tell me about a time you asked for help earlier than you wanted to.",
+    "How do you leave a project easier for the next person?",
+    "What would you want this team to stop doing in your first month?",
+    "Describe a time you translated a complex point for a non-expert.",
+    "How do you choose what not to do?",
+    "Tell me about a result that took longer than you expected.",
+    "What does trust look like between you and a manager?",
+    "How do you share news you know people will not like?",
+    "What skill are you still deliberately building for {role}?",
+    "Tell me about a meeting where you changed the outcome.",
+    "How do you recover after something ships and it is wrong?",
+    "What would you want me to notice about how you work?",
+    "Describe a time you protected the quality of the work.",
+    "How should a team use your first ninety days in {role}?",
+    "Thinking about {angle}, what example from your own work should I hear?",
+    "Where has {angle} already shown up in work like {role}?",
+    "Tell me about a tradeoff you made while doing work like {role}.",
+    "What would you want finished in {role} that a job description would miss?",
+    "How do you decide who needs to know when the plan shifts?",
+    "Describe a time you inherited work and made it yours.",
+    "What do you do in the first hour when a priority lands on you?",
+    "Tell me about a time you were the calm person in the room.",
+    "How do you keep your own work visible without talking over people?",
+    "What is a story from your background that {role} still needs?",
+)
+
+_SPARE_QUESTIONS = (
+    "Tell me about a time you had to start over on something you cared about.",
+    "What do you do when you realize you are the only one who sees the risk?",
+    "How do you decide which detail is worth a conversation?",
+    "Describe a time you made the work simpler for someone else.",
+    "What's a belief about your work that you used to hold and don't anymore?",
+    "Tell me about a moment you chose the slower path on purpose.",
+    "How do you keep going when the feedback is vague?",
+    "What would you want a new teammate to copy from how you work?",
+    "Tell me about a promise you kept after it got inconvenient.",
+    "How do you tell the difference between a real problem and a noisy one?",
+    "What's something {role} would ask of you that your last role did not?",
+    "Tell me about a time {angle} changed what you did next.",
+)
 
 FALLBACK_QUESTIONS = (
     "Tell me about yourself.",
@@ -283,6 +399,7 @@ class InterviewScript:
     questions: tuple[str, ...]
     role_name: str = ""
     role_brief: str = ""
+    small_talk: str = ""
 
 
 def _clean_role_name(value: str) -> str:
@@ -408,12 +525,79 @@ def choose_interviewer_name() -> str:
     return random.choice(INTERVIEWER_NAMES)
 
 
+def is_opening_question(question: str) -> bool:
+    return _is_opener(question)
+
+
 def _is_opener(question: str) -> bool:
     lowered = question.lower()
-    return "about yourself" in lowered or "about you" in lowered
+    return any(
+        hint in lowered
+        for hint in (
+            "about yourself",
+            "about you",
+            "who you are",
+            "how you got",
+            "introduce",
+            "the work you do",
+            "ended up",
+            "proudest",
+            "know about you",
+        )
+    )
 
 
-def normalize_interview(payload: Any, interviewer_name: str) -> InterviewScript:
+def material_key(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().casefold())
+
+
+def question_key(question: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", (question or "").lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def session_variety() -> str:
+    angle = random.choice(VARIETY_BRIEFS)
+    return f"{angle} Session cue {secrets.token_hex(3)}."
+
+
+def encouraging_note(transcript: str) -> str:
+    if is_non_answer(transcript):
+        return (
+            "It's fine to pause, and you have more to draw on than it feels like. "
+            "Next time, start with the point, then one real example and how it turned out."
+        )
+    return (
+        "That gives an interviewer something solid, and you're on the right track. "
+        "Next time, keep opening with the point and closing with the result."
+    )
+
+
+def feedback_text(transcript: str, guidance: str) -> str:
+    cleaned = " ".join((guidance or "").split())
+    return cleaned or encouraging_note(transcript)
+
+
+def small_talk_is_stale(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in _STALE_SMALL_TALK)
+
+
+def acceptable_small_talk(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", (text or "")).strip()
+    if "?" not in cleaned or len(cleaned) < 12 or len(cleaned) > 180:
+        return False
+    if cleaned.lower() == MIC_TEST_QUESTION.lower():
+        return False
+    return not small_talk_is_stale(cleaned)
+
+
+def fresh_small_talk() -> str:
+    choices = [line for line in SMALL_TALK_BANK if acceptable_small_talk(line)]
+    return random.choice(choices or list(SMALL_TALK_BANK))
+
+
+def normalize_interview(payload: Any, interviewer_name: str, *, avoid: list[str] | None = None) -> InterviewScript:
     if isinstance(payload, list):
         payload = {"questions": payload}
     if not isinstance(payload, dict):
@@ -428,44 +612,94 @@ def normalize_interview(payload: Any, interviewer_name: str) -> InterviewScript:
     if name.lower() not in introduction.lower():
         introduction = f"Hi, I'm {name}, {title}. Thanks for making the time."
     introduction = _with_answer_time(_with_question_invite(introduction))
-    items = payload.get("questions", [])
-    cleaned: list[str] = []
-    for item in items:
-        if isinstance(item, dict):
-            text = str(item.get("question") or item.get("text") or "")
-        else:
-            text = str(item)
-        text = re.sub(r"^\s*\d+[\).\:-]\s*", "", text).strip()
-        text = re.sub(r"\s+", " ", text)
-        if text:
-            cleaned.append(text)
+    cleaned = _clean_question_items(payload)
     if not cleaned:
         raise ValueError("The model did not return questions.")
-    if not _is_opener(cleaned[0]):
-        cleaned.insert(0, "Tell me about yourself.")
-    unique: list[str] = []
-    seen: set[str] = set()
-    for question in cleaned:
-        key = question.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(question[:500])
-        if len(unique) == QUESTION_LIMIT:
-            break
-    for question in FALLBACK_QUESTIONS:
-        if len(unique) == QUESTION_LIMIT:
-            break
-        if question.lower() in seen:
-            continue
-        seen.add(question.lower())
-        unique.append(question)
-    return InterviewScript(name, title, introduction[:900], tuple(unique[:QUESTION_LIMIT]), role_name, role_brief)
+    selected = _dedupe_keeping_order(cleaned, list(avoid or []))
+    return InterviewScript(
+        name,
+        title,
+        introduction[:900],
+        tuple(selected),
+        role_name,
+        role_brief,
+        _small_talk_from_payload(payload),
+    )
 
 
-def questions_input(job_description: str, resume_text: str, interviewer_name: str) -> str:
+def extend_interview(script: InterviewScript, payload: Any, *, avoid: list[str] | None = None) -> InterviewScript:
+    incoming = _clean_question_items(payload)
+    merged = _dedupe_keeping_order([*script.questions, *incoming], list(avoid or []))
+    return _with_questions(script, merged)
+
+
+def fill_interview(script: InterviewScript, *, avoid: list[str] | None = None, variety: str = "") -> InterviewScript:
+    blocked = list(avoid or [])
+    chosen = _dedupe_keeping_order(list(script.questions), blocked)
+    used = _used_keys(chosen, blocked)
+    if not chosen or not _is_opener(chosen[0]):
+        opener = _fresh_opener(used)
+        if opener:
+            chosen = [opener, *chosen]
+            used.add(question_key(opener))
+    role = _spoken_role(script.role_name)
+    angle = _angle_phrase(variety)
+    rng = random.Random(variety or "session")
+    patterns = list(_EXTRA_PATTERNS)
+    rng.shuffle(patterns)
+    extras = [_render_extra(pattern, role, angle) for pattern in patterns]
+    extras.extend(FALLBACK_QUESTIONS)
+    for question in extras:
+        if len(chosen) >= QUESTION_LIMIT:
+            break
+        text = re.sub(r"\s+", " ", question).strip()[:500]
+        key = question_key(text)
+        if not key or key in used:
+            continue
+        used.add(key)
+        chosen.append(text)
+    for question in _SPARE_QUESTIONS:
+        if len(chosen) >= QUESTION_LIMIT:
+            break
+        text = _render_extra(question, role, angle)
+        key = question_key(text)
+        if not key or key in used:
+            continue
+        used.add(key)
+        chosen.append(text[:500])
+    return _with_questions(script, chosen)
+
+
+def questions_input(
+    job_description: str,
+    resume_text: str,
+    interviewer_name: str,
+    *,
+    avoid: list[str] | None = None,
+    variety: str = "",
+) -> str:
     return (
         f"INTERVIEWER NAME:\n{interviewer_name.strip()}\n\n"
+        f"{_avoid_block(avoid)}"
+        f"SESSION ANGLE:\n{variety.strip() or 'A fresh conversation.'}\n"
+        "Use the angle so this set is different from every other session. Do not mention the angle or the cue.\n\n"
+        f"JOB DESCRIPTION:\n{job_description.strip()}\n\n"
+        f"CANDIDATE BACKGROUND:\n{resume_text.strip()}\n"
+    )
+
+
+def more_questions_input(
+    job_description: str,
+    resume_text: str,
+    *,
+    needed: int,
+    avoid: list[str] | None = None,
+    variety: str = "",
+) -> str:
+    return (
+        f"NEW QUESTIONS NEEDED:\n{max(1, needed)}\n\n"
+        f"{_avoid_block(avoid)}"
+        f"SESSION ANGLE:\n{variety.strip() or 'A fresh conversation.'}\n\n"
         f"JOB DESCRIPTION:\n{job_description.strip()}\n\n"
         f"CANDIDATE BACKGROUND:\n{resume_text.strip()}\n"
     )
@@ -668,16 +902,17 @@ def coach_input(
     prior_feedback: list[str] | None = None,
 ) -> str:
     spoken = (transcript or "").strip()
-    thin = is_thin_transcript(spoken)
-    if thin:
+    if is_non_answer(spoken) or is_thin_transcript(spoken):
         check = (
             "The transcript is empty or too thin to convey an answer. "
-            "Write a full honest answer from the background. Do not invent a scene."
+            "Write a full honest answer from the background. Do not invent a scene. "
+            "Always include encouraging guidance, even when there is nothing else to correct."
         )
     else:
         check = (
             "The transcript conveys an answer. Stay close to what the candidate meant. "
-            "Do not replace their story with a shinier one."
+            "Do not replace their story with a shinier one. "
+            "If nothing needs repair, encourage them instead of inventing a weakness."
         )
     history = _format_prior(prior or [])
     shape = answer_shape(question)
@@ -961,7 +1196,12 @@ def coach_from_payload(
         answer = polish_spoken_answer(raw_text)
     if not answer:
         raise ValueError("The model returned an empty answer.")
-    guidance = shape_feedback(guidance, question=question, transcript=transcript, prior_notes=prior_notes)
+    guidance = shape_feedback(
+        guidance or encouraging_note(transcript),
+        question=question,
+        transcript=transcript,
+        prior_notes=prior_notes,
+    )
     if is_non_answer(transcript) or _is_reassurance(bridge):
         bridge = ""
     return answer, guidance, bridge[:240]
@@ -970,3 +1210,143 @@ def coach_from_payload(
 def _is_reassurance(bridge: str) -> bool:
     lowered = bridge.lower()
     return any(phrase in lowered for phrase in ("no worry", "no worries", "no problem", "that's okay", "that is okay"))
+
+
+_STALE_SMALL_TALK = (
+    "how was your day",
+    "how's your day",
+    "hows your day",
+    "how is your day",
+    "how your day",
+    "how's it going",
+    "hows it going",
+    "how is it going",
+    "how are you",
+    "how're you",
+    "howre you",
+    "microphone",
+    "your first name",
+    "the weather",
+    "coffee",
+    "the weekend",
+    "your commute",
+    "this weekend",
+)
+
+
+def _clean_question_items(payload: Any) -> list[str]:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("questions", [])
+    else:
+        return []
+    if not isinstance(items, list):
+        return []
+    cleaned: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            text = str(item.get("question") or item.get("text") or "")
+        else:
+            text = str(item)
+        text = re.sub(r"^\s*\d+[\).\:-]\s*", "", text).strip()
+        text = re.sub(r"\s+", " ", text)
+        if text:
+            cleaned.append(text[:500])
+    return cleaned
+
+
+def _used_keys(*groups: list[str] | tuple[str, ...]) -> set[str]:
+    keys: set[str] = set()
+    for group in groups:
+        for question in group:
+            key = question_key(question)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _fresh_opener(used: set[str]) -> str | None:
+    for opener in OPENING_QUESTIONS:
+        key = question_key(opener)
+        if key and key not in used:
+            return opener
+    return None
+
+
+def _place_opener(questions: list[str], used: set[str]) -> list[str]:
+    for index, question in enumerate(questions):
+        if _is_opener(question):
+            if index == 0:
+                return questions
+            return [question, *questions[:index], *questions[index + 1 :]]
+    opener = _fresh_opener(used)
+    if not opener:
+        return questions
+    return [opener, *questions]
+
+
+def _dedupe_keeping_order(questions: list[str], avoid: list[str]) -> list[str]:
+    used = _used_keys(avoid)
+    chosen: list[str] = []
+    for question in questions:
+        key = question_key(question)
+        if not key or key in used:
+            continue
+        used.add(key)
+        chosen.append(question[:500])
+        if len(chosen) == QUESTION_LIMIT:
+            break
+    placed = _place_opener(chosen, used)
+    return placed[:QUESTION_LIMIT]
+
+
+def _with_questions(script: InterviewScript, questions: list[str]) -> InterviewScript:
+    return InterviewScript(
+        script.interviewer_name,
+        script.interviewer_title,
+        script.introduction,
+        tuple(questions[:QUESTION_LIMIT]),
+        script.role_name,
+        script.role_brief,
+        script.small_talk,
+    )
+
+
+def _render_extra(pattern: str, role: str, angle: str) -> str:
+    return pattern.replace("{role}", role).replace("{angle}", angle)
+
+
+def _spoken_role(role_name: str) -> str:
+    role = re.sub(r"\s+", " ", (role_name or "").strip())
+    return role[:80] or "this role"
+
+
+def _angle_phrase(variety: str) -> str:
+    text = re.sub(r"session cue [0-9a-f]+\.?", "", (variety or ""), flags=re.IGNORECASE)
+    text = re.sub(r"^lean into\s+", "", text.strip(), flags=re.IGNORECASE).strip(" .")
+    return text or "careful judgment"
+
+
+def _avoid_block(avoid: list[str] | None) -> str:
+    lines: list[str] = []
+    for question in avoid or []:
+        text = " ".join((question or "").split())
+        if text:
+            lines.append(f"- {text}")
+        if len(lines) == 150:
+            break
+    listing = "\n".join(lines) or "None yet."
+    return (
+        f"ALREADY USED FOR THIS ROLE:\n{listing}\n"
+        "Do not ask any of these again, and do not ask a light rewording of them.\n\n"
+    )
+
+
+def _small_talk_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        text = str(payload.get("small_talk") or payload.get("small_talk_question") or "")
+        text = re.sub(r"\s+", " ", text).strip().strip('"')
+        if acceptable_small_talk(text):
+            return text
+    return fresh_small_talk()

@@ -27,9 +27,11 @@ class FakeMessages:
     def __init__(self, text: str):
         self.text = text
         self.kwargs = None
+        self.calls = []
 
     def create(self, **kwargs):
         self.kwargs = kwargs
+        self.calls.append(kwargs)
         return SimpleResponse(self.text)
 
 
@@ -231,7 +233,9 @@ def test_normalize_questions_and_coach_prompt():
     assert script.interviewer_name == "Amelia Ward"
     assert script.questions[0] == "Tell me about yourself."
     assert script.questions[1] == "Why this role?"
-    assert len(script.questions) == 25
+    assert len(script.questions) == 2
+    assert prompts.acceptable_small_talk(script.small_talk)
+    assert not prompts.small_talk_is_stale(script.small_talk)
     assert "3 minutes" in script.introduction
     assert "ask me" in script.introduction.lower()
     assert "easy" not in script.introduction.lower()
@@ -240,6 +244,8 @@ def test_normalize_questions_and_coach_prompt():
     assert prompts.heard_microphone("Sam, it's been a good morning")
     assert not prompts.heard_microphone("   ")
     assert prompts.MIC_TEST_QUESTION
+    assert "day" not in prompts.MIC_TEST_QUESTION.lower()
+    assert "first name" in prompts.MIC_TEST_QUESTION.lower()
     assert prompts.is_non_answer("")
     assert prompts.is_non_answer("Interesting.")
     assert prompts.is_non_answer("No worries")
@@ -250,6 +256,20 @@ def test_normalize_questions_and_coach_prompt():
     assert answer == "I did"
     assert "result" in guidance
     assert bridge == ""
+    silent_answer, silent_note, silent_bridge = prompts.coach_from_payload(
+        {"answer": "I would open with the point and one example from the work."},
+        "",
+        "",
+    )
+    assert silent_answer.startswith("I would open")
+    assert "pause" in silent_note.lower()
+    assert silent_bridge == ""
+    _, strong_note, _ = prompts.coach_from_payload(
+        {"answer": "I led the migration."},
+        "",
+        "I led the migration for five years and cut the cycle time.",
+    )
+    assert "right track" in strong_note.lower()
 
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
@@ -304,11 +324,18 @@ def test_claude_requests_use_the_default_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
-    client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"]}')
+    client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"], "small_talk": "How\'s your day going so far?"}')
     script = claude_client.generate_questions("job", "resume", cache_key="user-1", client=client)
-    assert script.questions[0] == "Tell me about yourself."
+    assert prompts.is_opening_question(script.questions[0])
+    assert "What hiring problem did you solve?" in script.questions
+    assert len(script.questions) == 25
+    assert len({prompts.question_key(item) for item in script.questions}) == 25
+    assert prompts.acceptable_small_talk(script.small_talk)
+    assert "day" not in script.small_talk.lower()
     assert script.interviewer_name in prompts.INTERVIEWER_NAMES
-    sent = client.messages.kwargs
+    assert "ALREADY USED FOR THIS ROLE" in client.messages.calls[0]["messages"][0]["content"]
+    assert "SESSION ANGLE" in client.messages.calls[0]["messages"][0]["content"]
+    sent = client.messages.calls[0]
     assert sent["model"] == "claude-sonnet-5-5"
     assert sent["max_tokens"] == 8000
     assert sent["output_config"] == {"effort": "low"}
@@ -356,6 +383,67 @@ def test_claude_requests_use_the_default_model(monkeypatch):
         assert len(re.findall(r"[.!?]", note)) <= 2
         seen.append(note)
     assert "citi" in seen[0].lower()
+
+
+def test_same_role_gets_a_new_question_set(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    payload = {
+        "role": "Director of Analytics at Northwind",
+        "title": "Director of Analytics, Northwind",
+        "introduction": "Hi, I'm Amelia Ward. I lead analytics.",
+        "small_talk": "How was your day?",
+        "questions": [
+            "What hiring problem did you solve?",
+            "How do you work with recruiters?",
+        ],
+    }
+    first = claude_client.generate_questions(
+        "Director of Analytics\nNorthwind",
+        "resume",
+        cache_key="user-1",
+        client=FakeClient(json.dumps(payload)),
+    )
+    second = claude_client.generate_questions(
+        "Director of Analytics\nNorthwind",
+        "resume",
+        cache_key="user-1-next",
+        client=FakeClient(json.dumps(payload)),
+        avoid=list(first.questions),
+    )
+    assert len(second.questions) == 25
+    assert not (set(map(prompts.question_key, first.questions)) & set(map(prompts.question_key, second.questions)))
+    user = auth.register_user("Case", "fresh-role@example.com", "long-password")
+    created = db.create_interview(
+        user.id,
+        "Director of Analytics\nNorthwind",
+        "Resume",
+        list(first.questions),
+        role_name="Director of Analytics at Northwind",
+        small_talk=first.small_talk,
+    )
+    db.create_interview(
+        user.id,
+        "Recruiter\nOther Co",
+        "Resume",
+        ["This question belongs to another role."],
+        role_name="Recruiter at Other Co",
+    )
+    prior = db.questions_for_role(user.id, "Director of Analytics\nNorthwind")
+    assert "What hiring problem did you solve?" in prior
+    assert "This question belongs to another role." not in prior
+    saved = db.get_interview(created.id)
+    assert saved is not None
+    assert prompts.acceptable_small_talk(saved.small_talk)
+
+
+def test_a_quiet_answer_still_keeps_feedback():
+    source = (ROOT / "interview_app" / "ui.py").read_text()
+    assert "move_past_silence" not in source
+    assert "coach_answer" in source
+    assert "feedback_text" in source
+    note = prompts.feedback_text("", "")
+    assert "pause" in note.lower()
+    assert prompts.feedback_text("I led the migration for five years.", "Keep the example.") == "Keep the example."
 
 
 def test_claude_reads_document_images(monkeypatch):

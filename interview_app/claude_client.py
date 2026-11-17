@@ -135,20 +135,77 @@ def generate_questions(
     cache_key: str,
     client=None,
     user_id: str | None = None,
+    avoid: list[str] | None = None,
 ) -> prompts.InterviewScript:
     interviewer_name = prompts.choose_interviewer_name()
+    variety = prompts.session_variety()
+    blocked = [item.strip() for item in (avoid or []) if item and item.strip()]
     raw = complete(
         prompts.QUESTION_INSTRUCTIONS,
-        prompts.questions_input(job_description, resume_text, interviewer_name),
+        prompts.questions_input(
+            job_description,
+            resume_text,
+            interviewer_name,
+            avoid=blocked,
+            variety=variety,
+        ),
         cache_key=cache_key,
         max_output_tokens=8000,
         client=client,
         user_id=user_id,
     )
     try:
-        return prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name)
+        script = prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name, avoid=blocked)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ClaudeError("The AI interviewer did not return questions. Try again.") from exc
+    if len(script.questions) < prompts.QUESTION_LIMIT:
+        script = _more_questions(
+            script,
+            job_description=job_description,
+            resume_text=resume_text,
+            avoid=blocked,
+            variety=variety,
+            cache_key=cache_key,
+            client=client,
+            user_id=user_id,
+        )
+    if len(script.questions) < prompts.QUESTION_LIMIT:
+        script = prompts.fill_interview(script, avoid=blocked, variety=variety)
+    return script
+
+
+def _more_questions(
+    script: prompts.InterviewScript,
+    *,
+    job_description: str,
+    resume_text: str,
+    avoid: list[str],
+    variety: str,
+    cache_key: str,
+    client,
+    user_id: str | None,
+) -> prompts.InterviewScript:
+    needed = prompts.QUESTION_LIMIT - len(script.questions)
+    if needed <= 0:
+        return script
+    try:
+        raw = complete(
+            prompts.MORE_QUESTION_INSTRUCTIONS,
+            prompts.more_questions_input(
+                job_description,
+                resume_text,
+                needed=needed,
+                avoid=[*avoid, *script.questions],
+                variety=variety,
+            ),
+            cache_key=cache_key,
+            max_output_tokens=4000,
+            client=client,
+            user_id=user_id,
+        )
+        return prompts.extend_interview(script, prompts.parse_model_json(raw), avoid=avoid)
+    except (ClaudeError, ValueError, TypeError, json.JSONDecodeError):
+        return script
 
 
 def coach_answer(
@@ -187,7 +244,7 @@ def coach_answer(
         if not cleaned.startswith("{") and not cleaned.startswith("```"):
             cleaned = prompts.polish_spoken_answer(cleaned)
         note = prompts.shape_feedback(
-            "",
+            prompts.encouraging_note(transcript),
             question=question,
             transcript=transcript,
             prior_notes=prior_feedback,
