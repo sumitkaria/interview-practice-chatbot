@@ -41,13 +41,6 @@ _VIEW_KEYS = {
 }
 
 
-PRIVACY_NOTE = (
-    "Your résumé and the job description are saved for your account and sent to xAI "
-    "when a file is read or the interviewer replies. The microphone recording stays in this browser. "
-    "You can download your data or delete the account from Account."
-)
-
-
 def main() -> None:
     inject_css()
     try:
@@ -433,7 +426,6 @@ def consume_verification() -> None:
 def render_login() -> None:
     st.markdown(BRAND, unsafe_allow_html=True)
     st.caption("Your résumé and the role stay with your account.")
-    st.caption(PRIVACY_NOTE)
     render_password_reset()
     if config.google_auth_configured():
         if st.button("Continue with Google", use_container_width=True):
@@ -530,18 +522,6 @@ def render_about() -> None:
         st.write(
             "Interview Practice is a private rehearsal. You add a job and a résumé, "
             "then speak or type through one interview at a time."
-        )
-        st.write(PRIVACY_NOTE)
-        st.write(
-            "The app runs at "
-            + config.public_app_url()
-            + ". To use your own domain, add it in Streamlit Cloud, set PUBLIC_APP_URL to that address, "
-            "and add the same address with /oauth2callback to the Google sign-in client."
-        )
-        st.write(
-            "Download your data from Account for a copy you keep. "
-            "Turn on backups in the Neon project for the whole database. This app cannot do that itself. "
-            "If many people practice at once, use Neon’s pooled connection string, the one whose host contains -pooler."
         )
 
 
@@ -724,7 +704,6 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
         sig_key="resume_upload_sig",
         upload_key=f"resume_files_{user.id}_{st.session_state.get('upload_nonce', 0)}",
     )
-    st.caption(PRIVACY_NOTE)
     note = st.session_state.get("storage_note")
     if note:
         st.caption(note)
@@ -732,11 +711,6 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()
-    if config.neon_direct_connection():
-        st.caption(
-            "The database is on a direct Neon address. "
-            "The pooled address, whose host contains -pooler, fits more people practicing at once."
-        )
     if config.uses_local_sqlite() and not config.on_streamlit_cloud():
         st.caption("Saving to a local database file. Set DATABASE_URL to use Postgres.")
     st.markdown("<div class='sidebar-history-anchor'></div>", unsafe_allow_html=True)
