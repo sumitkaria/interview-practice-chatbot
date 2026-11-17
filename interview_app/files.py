@@ -81,7 +81,7 @@ def extract_named_bytes(name: str, data: bytes, image_reader) -> str:
     elif extension in IMAGE_EXTENSIONS:
         if image_reader is None:
             raise ValueError(
-                f"{name} is an image. Add XAI_API_KEY so Grok can read it, or paste the text."
+                f"{name} is an image. Paste the text instead."
             )
         text = image_reader(data, _image_mime(extension))
     else:

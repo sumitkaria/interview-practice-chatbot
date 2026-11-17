@@ -146,6 +146,15 @@ class AppEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class ContactMessage(Base):
+    __tablename__ = "contact_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    reply_email: Mapped[str] = mapped_column(String(320), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class PasswordReset(Base):
     __tablename__ = "password_resets"
 
@@ -920,6 +929,29 @@ def record_event(user_id: str | None, kind: str, message: str) -> None:
             )
     except Exception:
         return
+
+
+def save_contact_message(reply_email: str, message: str) -> None:
+    text = (message or "").strip()
+    if not text:
+        return
+    with session_scope() as session:
+        session.add(
+            ContactMessage(
+                id=str(uuid.uuid4()),
+                reply_email=(reply_email or "").strip()[:320],
+                message=text[:4000],
+                created_at=utcnow(),
+            )
+        )
+
+
+def recent_contact_messages(limit: int = 20) -> list[tuple[datetime, str, str]]:
+    with session_scope() as session:
+        rows = session.scalars(
+            select(ContactMessage).order_by(ContactMessage.created_at.desc()).limit(limit)
+        ).all()
+        return [(row.created_at, row.reply_email or "", row.message or "") for row in rows]
 
 
 def recent_events(kind: str, limit: int = 30) -> list[tuple[datetime, str, str]]:

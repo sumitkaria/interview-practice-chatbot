@@ -450,6 +450,29 @@ def test_login_locks_after_repeated_failures():
     assert auth.login_user("lock@example.com", "long-password").email == "lock@example.com"
 
 
+def test_contact_message_is_saved_for_the_account_owner():
+    db.save_contact_message("person@example.com", "The microphone button did nothing.")
+    messages = db.recent_contact_messages()
+    assert messages
+    assert messages[0][1] == "person@example.com"
+    assert "microphone" in messages[0][2]
+
+
+def test_sign_in_page_has_contact_and_hides_the_reset_note():
+    source = (ROOT / "interview_app" / "ui.py").read_text()
+    assert "Contact us" in source
+    assert "Password reset by email is not set up" not in source
+    assert "After you sign in, change the password from Account" not in source
+
+
+def test_password_reset_without_mail_does_not_mention_account(monkeypatch):
+    auth.register_user("Sam", "nomail@example.com", "long-password")
+    monkeypatch.setattr("interview_app.mailer.configured", lambda: False)
+    with pytest.raises(auth.AuthError, match="Contact us") as caught:
+        auth.request_password_reset("nomail@example.com")
+    assert "not set up" not in str(caught.value)
+
+
 def test_password_reset_and_change_sign_out_other_sessions(monkeypatch):
     user = auth.register_user("Sam", "reset@example.com", "long-password")
     sent = {}

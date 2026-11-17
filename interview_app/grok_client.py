@@ -18,15 +18,12 @@ class GrokError(Exception):
 
 
 class GrokNotConfigured(GrokError):
-    """No xAI API key is available."""
+    """No AI key is available."""
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(
             message
-            or (
-                "Add XAI_API_KEY to Streamlit secrets or a local .env file. "
-                "Create a key at https://console.x.ai/ and add credits to that account."
-            )
+            or "The AI interviewer is not available right now."
         )
 
 
@@ -48,7 +45,7 @@ def build_client(api_key: str | None = None) -> OpenAI:
 def _sanitize(exc: Exception, api_key: str) -> str:
     text = " ".join(str(exc).split())
     if api_key:
-        text = text.replace(api_key, "XAI_API_KEY")
+        text = text.replace(api_key, "the AI key")
     return text[:240]
 
 
@@ -66,7 +63,7 @@ def response_text(response) -> str:
                 chunks.append(value)
     if chunks:
         return "\n".join(chunks)
-    raise GrokError("Grok returned an empty response. Try again.")
+    raise GrokError("The AI interviewer returned an empty response. Try again.")
 
 
 def complete(
@@ -100,31 +97,24 @@ def complete(
             ],
         )
     except AuthenticationError as exc:
-        _remember_model_error(user_id, "The Grok API key was rejected.")
-        raise GrokError(
-            "The Grok API key was rejected. Check XAI_API_KEY in Streamlit secrets."
-        ) from exc
+        _remember_model_error(user_id, "The AI key was rejected.")
+        raise GrokError("The AI interviewer could not sign in. Try again in a moment.") from exc
     except RateLimitError as exc:
-        _remember_model_error(user_id, "Grok is rate limited or out of credits.")
-        raise GrokError(
-            "Grok is rate limited, or the account needs more credits. "
-            "Check the balance at https://console.x.ai/."
-        ) from exc
+        _remember_model_error(user_id, "The AI interviewer is rate limited or out of credits.")
+        raise GrokError("The AI interviewer is busy right now. Try again in a moment.") from exc
     except APIStatusError as exc:
-        _remember_model_error(user_id, f"Grok returned {exc.status_code}.")
+        _remember_model_error(user_id, f"The AI interviewer returned {exc.status_code}.")
         if exc.status_code in {402, 403}:
-            raise GrokError(
-                "Grok refused the request. Check that the API key is valid and the account has credits."
-            ) from exc
-        raise GrokError(f"Grok returned an error ({exc.status_code}). {_sanitize(exc, api_key)}") from exc
+            raise GrokError("The AI interviewer could not answer. Try again in a moment.") from exc
+        raise GrokError(f"The AI interviewer returned an error ({exc.status_code}). {_sanitize(exc, api_key)}") from exc
     except APIConnectionError as exc:
-        _remember_model_error(user_id, "Could not reach the Grok API.")
-        raise GrokError("Could not reach the Grok API. Check the network and try again.") from exc
+        _remember_model_error(user_id, "Could not reach the AI interviewer.")
+        raise GrokError("Could not reach the AI interviewer. Try again.") from exc
     except GrokError:
         raise
     except Exception as exc:
         _remember_model_error(user_id, _sanitize(exc, api_key))
-        raise GrokError(f"Grok could not complete that request. {_sanitize(exc, api_key)}") from exc
+        raise GrokError(f"The AI interviewer could not complete that request. {_sanitize(exc, api_key)}") from exc
     finally:
         _MODEL_SLOTS.release()
     return response_text(response)
@@ -154,7 +144,7 @@ def generate_questions(
     try:
         return prompts.normalize_interview(prompts.parse_model_json(raw), interviewer_name)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise GrokError("Grok did not return interview questions. Try again.") from exc
+        raise GrokError("The AI interviewer did not return questions. Try again.") from exc
 
 
 def coach_answer(
@@ -182,7 +172,7 @@ def coach_answer(
     except (ValueError, TypeError, json.JSONDecodeError):
         cleaned = raw.strip()
         if not cleaned:
-            raise GrokError("Grok returned an empty answer. Try again.")
+            raise GrokError("The AI interviewer returned an empty answer. Try again.")
         return cleaned, "That already has a clear point. Next time, add the result in one sentence.", ""
 
 
@@ -242,13 +232,13 @@ def answer_candidate_question(
     except (ValueError, TypeError, json.JSONDecodeError):
         reply = raw.strip()
         if not reply:
-            raise GrokError("Grok returned an empty answer. Try again.")
+            raise GrokError("The AI interviewer returned an empty answer. Try again.")
         return reply
     reply = ""
     if isinstance(payload, dict):
         reply = str(payload.get("reply") or payload.get("answer") or "").strip()
     if not reply:
-        raise GrokError("Grok returned an empty answer. Try again.")
+        raise GrokError("The AI interviewer returned an empty answer. Try again.")
     return reply
 
 
@@ -279,5 +269,5 @@ def extract_document_text(
     )
     cleaned = text.strip()
     if not cleaned:
-        raise GrokError("Grok could not read that image. Paste the text instead.")
+        raise GrokError("The AI interviewer could not read that image. Paste the text instead.")
     return cleaned
