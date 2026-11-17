@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from docx import Document
 
+from streamlit.testing.v1 import AppTest
+
 from interview_app import auth, claude_client, config, db, files, mailer, prompts, ui
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,9 +27,11 @@ class FakeMessages:
     def __init__(self, text: str):
         self.text = text
         self.kwargs = None
+        self.calls = []
 
     def create(self, **kwargs):
         self.kwargs = kwargs
+        self.calls.append(kwargs)
         return SimpleResponse(self.text)
 
 
@@ -175,8 +179,24 @@ def test_interview_history_keeps_older_interviews():
     assert ui.uploaded_name("ATB job description.docx", "Role text", "Pasted job description") == "ATB job description.docx"
     assert ui.uploaded_name("Pasted text", "Role text", "Pasted job description") == "Pasted job description"
     assert ui.uploaded_name("", "", "Pasted job description") == "Nothing uploaded yet"
+    assert ui.uploaded_file_label("ATB job description.docx", "Role text") == "ATB job description.docx"
+    assert ui.uploaded_file_label("Pasted text", "Role text") == ""
+    assert ui.uploaded_file_label("", "Role text") == ""
+    assert ui.uploaded_file_label("resume.pdf", "   ") == ""
     assert ui.interview_history_label(first).startswith("CFO, Capital Markets at ATB Financial · ")
     assert "in progress" in ui.interview_history_label(second)
+
+
+def test_app_copy_says_resume():
+    for path in (ROOT / "interview_app").rglob("*"):
+        if path.suffix not in {".py", ".html"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "ésumé" not in text
+        assert "Ésumé" not in text
+    screen = (ROOT / "interview_app" / "ui.py").read_text(encoding="utf-8")
+    assert screen.count("Paste or Edit the text") == 1
+    assert "Edit the text" not in screen.replace("Paste or Edit the text", "")
 
 
 def test_interview_name_comes_from_the_job_description():
@@ -213,7 +233,9 @@ def test_normalize_questions_and_coach_prompt():
     assert script.interviewer_name == "Amelia Ward"
     assert script.questions[0] == "Tell me about yourself."
     assert script.questions[1] == "Why this role?"
-    assert len(script.questions) == 25
+    assert len(script.questions) == 2
+    assert prompts.acceptable_small_talk(script.small_talk)
+    assert not prompts.small_talk_is_stale(script.small_talk)
     assert "3 minutes" in script.introduction
     assert "ask me" in script.introduction.lower()
     assert "easy" not in script.introduction.lower()
@@ -222,6 +244,8 @@ def test_normalize_questions_and_coach_prompt():
     assert prompts.heard_microphone("Sam, it's been a good morning")
     assert not prompts.heard_microphone("   ")
     assert prompts.MIC_TEST_QUESTION
+    assert "day" not in prompts.MIC_TEST_QUESTION.lower()
+    assert "first name" in prompts.MIC_TEST_QUESTION.lower()
     assert prompts.is_non_answer("")
     assert prompts.is_non_answer("Interesting.")
     assert prompts.is_non_answer("No worries")
@@ -232,24 +256,86 @@ def test_normalize_questions_and_coach_prompt():
     assert answer == "I did"
     assert "result" in guidance
     assert bridge == ""
+    silent_answer, silent_note, silent_bridge = prompts.coach_from_payload(
+        {"answer": "I would open with the point and one example from the work."},
+        "",
+        "",
+    )
+    assert silent_answer.startswith("I would open")
+    assert "pause" in silent_note.lower()
+    assert silent_bridge == ""
+    _, strong_note, _ = prompts.coach_from_payload(
+        {"answer": "I led the migration."},
+        "",
+        "I led the migration for five years and cut the cycle time.",
+    )
+    assert "right track" in strong_note.lower()
 
     thin = prompts.coach_input("job", "resume", "Tell me about yourself.", "um")
     assert "too thin" in thin
-    full = prompts.coach_input("job", "resume", "Tell me about yourself.", "I spent four years building hiring tools for clinics")
+    assert "ANSWER SHAPE: career_story" in thin
+    full = prompts.coach_input(
+        "job",
+        "resume",
+        "Tell me about yourself.",
+        "I spent four years building hiring tools for clinics",
+        prior_feedback=["That was easy to listen to. Next time, open with where you are now."],
+    )
     assert "Stay close" in full
+    assert "FEEDBACK ALREADY GIVEN" in full
+    assert "open with where you are now" in full
+    assert "cheerful" in prompts.COACH_INSTRUCTIONS.lower()
+    assert "one short feedback" in prompts.COACH_INSTRUCTIONS.lower()
+    assert ui.FEEDBACK_LABEL == "Feedback"
+    assert "Do not invent" in prompts.COACH_INSTRUCTIONS
     assert prompts.is_thin_transcript("um hello")
     assert not prompts.is_thin_transcript("I spent four years building hiring tools for clinics and teams")
+
+    shaped = {
+        "Tell me about yourself.": "career_story",
+        "What drew you to this role?": "why_role",
+        "Why should we hire you?": "why_hire",
+        "What is your greatest weakness?": "weakness",
+        "Why are you leaving your current role?": "leaving",
+        "Walk me through a piece of work that shows how you operate.": "behavioral",
+        "Which skill in this role is your strongest, on a scale from 1 to 10?": "rating",
+        "Give me a practical example of how you would use that skill here.": "technical",
+        "Tell me about a time you disagreed with someone and how you handled it.": "conflict",
+        "Tell me about a time you made a mistake and what changed afterward.": "mistake",
+        "What are your salary expectations for this role?": "salary",
+        "What part of this role will stretch you, and how will you handle that?": "weakness",
+        "What does good work look like to you in this kind of role?": "open",
+        "How do you work when the team is remote or hybrid?": "remote",
+        "Where do you want this role to take you over the next couple of years?": "direction",
+        "What would you want to have accomplished by the end of the first six months?": "plan",
+        "Is there anything about your experience you want to make sure I understand?": "closing",
+        "Tell me about a result you are proud of and what you personally did.": "achievement",
+    }
+    for question, shape in shaped.items():
+        assert prompts.answer_shape(question) == shape, question
+    spoken = prompts.polish_spoken_answer(
+        "That's a great question. Situation: The queue was late. Action: I rebuilt the rota. Result: We caught up."
+    )
+    assert spoken == "The queue was late. I rebuilt the rota. We caught up."
+    assert prompts.polish_spoken_answer("I led the migration.") == "I led the migration."
 
 
 def test_claude_requests_use_the_default_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
-    client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"]}')
+    client = FakeClient('{"questions": ["What hiring problem did you solve?", "How do you work with recruiters?"], "small_talk": "How\'s your day going so far?"}')
     script = claude_client.generate_questions("job", "resume", cache_key="user-1", client=client)
-    assert script.questions[0] == "Tell me about yourself."
+    assert prompts.is_opening_question(script.questions[0])
+    assert "What hiring problem did you solve?" in script.questions
+    assert len(script.questions) == 25
+    assert len({prompts.question_key(item) for item in script.questions}) == 25
+    assert prompts.acceptable_small_talk(script.small_talk)
+    assert "day" not in script.small_talk.lower()
     assert script.interviewer_name in prompts.INTERVIEWER_NAMES
-    sent = client.messages.kwargs
+    assert "ALREADY USED FOR THIS ROLE" in client.messages.calls[0]["messages"][0]["content"]
+    assert "SESSION ANGLE" in client.messages.calls[0]["messages"][0]["content"]
+    sent = client.messages.calls[0]
     assert sent["model"] == "claude-sonnet-5-5"
     assert sent["max_tokens"] == 8000
     assert sent["output_config"] == {"effort": "low"}
@@ -269,6 +355,106 @@ def test_claude_requests_use_the_default_model(monkeypatch):
     assert answer == "I built the hiring workflow."
     assert guidance == "Lead with the result."
     assert bridge == ""
+    assert coach.messages.kwargs["output_config"] == {"effort": "low"}
+    assert "ANSWER SHAPE: career_story" in coach.messages.kwargs["messages"][0]["content"]
+    assert "Do not invent" in coach.messages.kwargs["system"][0]["text"]
+    assert "cheerful" in coach.messages.kwargs["system"][0]["text"].lower()
+
+    repeated = (
+        "You sounded polite and clear that you want to understand the role, and that openness is credible. "
+        "You didn't actually answer who you are or the path that brought you here, so the interviewer still doesn't have a reason to stay with you. "
+        "Next time, open with your current work at Citi, one earlier example such as Basel capital at RBC, and one line on why that fits regulatory delivery. "
+        "Then invite their questions."
+    )
+    seen: list[str] = []
+    for index in range(25):
+        note = prompts.shape_feedback(
+            repeated,
+            question=f"Question {index}",
+            transcript=f"I would like to understand the role {index}",
+            prior_notes=seen,
+        )
+        assert note not in seen
+        lowered = note.lower()
+        assert "didn't actually" not in lowered
+        assert "no reason" not in lowered
+        assert "invite their questions" not in lowered
+        assert len(note.split()) <= 42
+        assert len(re.findall(r"[.!?]", note)) <= 2
+        seen.append(note)
+    assert "citi" in seen[0].lower()
+
+    long_tip = prompts.shape_feedback(
+        "You were clear and specific. Next time, if a manager's comment comes to mind, open with that line "
+        "and then show how it changed the way you scope projects and plan the work with finance."
+    )
+    assert "if a manager's comment comes to mind." not in long_tip
+    assert long_tip.startswith("You were clear and specific.")
+    assert len(re.findall(r"[.!?]", long_tip)) == 2
+
+    assert not prompts.is_opening_question("What did a manager say about your work that changed how you plan?")
+    assert prompts.is_opening_question("Start by walking me through your last role.")
+
+
+def test_same_role_gets_a_new_question_set(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    payload = {
+        "role": "Director of Analytics at Northwind",
+        "title": "Director of Analytics, Northwind",
+        "introduction": "Hi, I'm Amelia Ward. I lead analytics.",
+        "small_talk": "How was your day?",
+        "questions": [
+            "What hiring problem did you solve?",
+            "How do you work with recruiters?",
+        ],
+    }
+    first = claude_client.generate_questions(
+        "Director of Analytics\nNorthwind",
+        "resume",
+        cache_key="user-1",
+        client=FakeClient(json.dumps(payload)),
+    )
+    second = claude_client.generate_questions(
+        "Director of Analytics\nNorthwind",
+        "resume",
+        cache_key="user-1-next",
+        client=FakeClient(json.dumps(payload)),
+        avoid=list(first.questions),
+    )
+    assert len(second.questions) == 25
+    assert not (set(map(prompts.question_key, first.questions)) & set(map(prompts.question_key, second.questions)))
+    user = auth.register_user("Case", "fresh-role@example.com", "long-password")
+    created = db.create_interview(
+        user.id,
+        "Director of Analytics\nNorthwind",
+        "Resume",
+        list(first.questions),
+        role_name="Director of Analytics at Northwind",
+        small_talk=first.small_talk,
+    )
+    db.create_interview(
+        user.id,
+        "Recruiter\nOther Co",
+        "Resume",
+        ["This question belongs to another role."],
+        role_name="Recruiter at Other Co",
+    )
+    prior = db.questions_for_role(user.id, "Director of Analytics\nNorthwind")
+    assert "What hiring problem did you solve?" in prior
+    assert "This question belongs to another role." not in prior
+    saved = db.get_interview(created.id)
+    assert saved is not None
+    assert prompts.acceptable_small_talk(saved.small_talk)
+
+
+def test_a_quiet_answer_still_keeps_feedback():
+    source = (ROOT / "interview_app" / "ui.py").read_text()
+    assert "move_past_silence" not in source
+    assert "coach_answer" in source
+    assert "feedback_text" in source
+    note = prompts.feedback_text("", "")
+    assert "pause" in note.lower()
+    assert prompts.feedback_text("I led the migration for five years.", "Keep the example.") == "Keep the example."
 
 
 def test_claude_reads_document_images(monkeypatch):
@@ -310,7 +496,7 @@ def test_account_can_choose_model_and_effort(monkeypatch):
 
 def test_missing_claude_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(config, "anthropic_api_key", lambda: None)
     with pytest.raises(claude_client.ClaudeNotConfigured):
         claude_client.generate_questions("job", "resume", cache_key="user")
 
@@ -400,6 +586,74 @@ def test_blank_editor_does_not_erase_saved_materials():
     saved = db.get_profile(user.id)
     assert saved.job_description == "Updated job only"
     assert saved.resume_text == "Original resume"
+
+
+def _editor_screen():
+    import streamlit as st
+
+    from interview_app import db, ui
+
+    user = db.get_user(st.session_state["uid"])
+    profile = db.get_profile(user.id)
+    ui.ensure_drafts(user, profile)
+    ui.render_sidebar(user, profile)
+
+
+def _assert_ran(app: AppTest) -> None:
+    failures = [exc.value for exc in app.exception]
+    assert not failures, failures
+
+
+def _area(app: AppTest, key: str) -> str:
+    found = [area.value for area in app.text_area if area.key == key]
+    assert found, [area.key for area in app.text_area]
+    return found[0]
+
+
+def test_file_uploads_update_the_other_editor_without_crashing():
+    user = auth.register_user("Sumit", "upload-widgets@example.com", "correct horse")
+    db.save_profile(user.id, "Original job", "job.txt", "Original resume", "resume.txt")
+    app = AppTest.from_function(_editor_screen)
+    app.session_state["uid"] = user.id
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "job_draft") == "Original job"
+    assert _area(app, "resume_draft") == "Original resume"
+
+    resume_uploader = next(item for item in app.file_uploader if item.label == "Upload resume")
+    resume_uploader.upload("background.txt", b"Led the platform team", "text/plain")
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "job_draft") == "Original job"
+    assert _area(app, "resume_draft") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Original job"
+    assert saved.resume_text == "Led the platform team"
+    assert saved.resume_source == "background.txt"
+    assert saved.resume_file_id
+
+    job_uploader = next(item for item in app.file_uploader if item.label == "Upload job description")
+    job_uploader.upload("role.txt", b"Director of analytics", "text/plain")
+    app.run()
+    _assert_ran(app)
+    assert _area(app, "job_draft") == "Director of analytics"
+    assert _area(app, "resume_draft") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Director of analytics"
+    assert saved.job_source == "role.txt"
+    assert saved.resume_text == "Led the platform team"
+    assert saved.job_file_id
+
+    job_uploader = next(item for item in app.file_uploader if item.label == "Upload job description")
+    job_uploader.upload("slides.pptx", b"not a real deck", "application/vnd.ms-powerpoint")
+    app.run()
+    _assert_ran(app)
+    assert any("could not be read" in item.value for item in app.error)
+    assert _area(app, "job_draft") == "Director of analytics"
+    assert _area(app, "resume_draft") == "Led the platform team"
+    saved = db.get_profile(user.id)
+    assert saved.job_description == "Director of analytics"
+    assert saved.resume_text == "Led the platform team"
 
 
 def test_blank_profile_is_restored_from_the_interview_or_file():

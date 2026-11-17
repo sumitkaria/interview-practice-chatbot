@@ -225,6 +225,7 @@ class InterviewRecord:
     chat_log: tuple[tuple[str, str], ...] = ()
     job_file_id: str = ""
     resume_file_id: str = ""
+    small_talk: str = ""
 
 
 @dataclass(frozen=True)
@@ -363,6 +364,7 @@ def _interview(row: Interview) -> InterviewRecord:
         ),
         job_file_id=str(payload.get("job_file_id") or ""),
         resume_file_id=str(payload.get("resume_file_id") or ""),
+        small_talk=str(payload.get("small_talk") or ""),
     )
 
 
@@ -549,6 +551,7 @@ def create_interview(
     role_brief: str = "",
     job_file_id: str = "",
     resume_file_id: str = "",
+    small_talk: str = "",
 ) -> InterviewRecord:
     ensure_interview_budget(user_id)
     now = utcnow()
@@ -585,6 +588,7 @@ def create_interview(
                     "bridges": {},
                     "job_file_id": job_file_id,
                     "resume_file_id": resume_file_id,
+                    "small_talk": small_talk,
                 }
             ),
             current_index=0,
@@ -604,6 +608,31 @@ def get_interview(interview_id: str) -> InterviewRecord | None:
         return _interview(row) if row else None
 
 
+def questions_for_role(user_id: str, job_description: str) -> list[str]:
+    """Questions already asked for this job, so a new session can avoid them."""
+    from interview_app import prompts
+
+    target_job = prompts.material_key(job_description)
+    target_role = prompts.interview_name(job_description).casefold()
+    found: list[str] = []
+    seen: set[str] = set()
+    for interview in list_interviews(user_id, limit=200):
+        job = prompts.material_key(interview.job_description)
+        named = (interview.role_name or "").strip()
+        role = (named or prompts.interview_name(interview.job_description)).casefold()
+        same_job = bool(target_job) and job == target_job
+        same_role = target_role not in {"", "practice"} and role == target_role
+        if not same_job and not same_role:
+            continue
+        for question in interview.questions:
+            key = prompts.question_key(question)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            found.append(question)
+    return found
+
+
 def list_interviews(user_id: str, limit: int = 100, offset: int = 0) -> list[InterviewRecord]:
     with session_scope() as session:
         rows = session.scalars(
@@ -617,7 +646,7 @@ def list_interviews(user_id: str, limit: int = 100, offset: int = 0) -> list[Int
 
 
 def newest_interview_with_materials(user_id: str) -> InterviewRecord | None:
-    """Most recent interview that still has a job description or résumé."""
+    """Most recent interview that still has a job description or resume."""
     with session_scope() as session:
         row = session.scalar(
             select(Interview)
