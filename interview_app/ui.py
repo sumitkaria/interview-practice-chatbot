@@ -279,6 +279,61 @@ def inject_css() -> None:
             border-color: #C9D5CF;
             border-radius: 10px;
         }
+        .account-panel { display: none; }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-testid="stTabs"] [role="tablist"],
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-baseweb="tab-list"] {
+            gap: 0.15rem;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-testid="stTab"],
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) button[data-baseweb="tab"] {
+            flex: 1 1 0;
+            min-width: 0;
+            height: auto !important;
+            min-height: 2.7rem;
+            padding: 0.35rem 0.2rem 0.5rem;
+            font-size: 0.78rem;
+            font-weight: 650;
+            line-height: 1.2;
+            white-space: normal !important;
+            text-align: center;
+            justify-content: center;
+            align-items: center;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-testid="stTab"] span,
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-testid="stTab"] p,
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) button[data-baseweb="tab"] p {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: unset !important;
+            font-size: inherit;
+            line-height: 1.2;
+            text-align: center;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-baseweb="tab-highlight"],
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) [data-testid="stTab"][data-selected] .react-aria-SelectionIndicator {
+            background-color: var(--forest) !important;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) .stDownloadButton button,
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) .stFormSubmitButton button {
+            background: var(--forest);
+            color: #F6F3EC;
+            border: 1px solid var(--forest);
+            border-radius: 999px;
+            text-align: center;
+            justify-content: center;
+            font-weight: 600;
+            box-shadow: none;
+        }
+        [data-testid="stColumn"]:has(.left-rail) [data-testid="stExpander"]:has(.account-panel) .stButton button {
+            background: transparent;
+            color: #8C3A32;
+            border: 1px solid #E4C4BE;
+            border-radius: 999px;
+            text-align: center;
+            justify-content: center;
+            font-weight: 600;
+            box-shadow: none;
+        }
         .studio {
             background: var(--card);
             border: 1px solid var(--line);
@@ -831,7 +886,6 @@ def render_sidebar(user: db.UserRecord, profile: db.ProfileRecord | None) -> Non
     render_model_settings(user)
     render_account(user)
     render_contact(f"sidebar-{user.id}")
-    render_change_password(user)
     if st.button("Log out", type="secondary", use_container_width=True):
         request_logout()
     cloud_storage_notice()
@@ -909,26 +963,6 @@ def offer_download(user_id: str, file_id: str, label: str, key: str) -> None:
     st.download_button(label, data=data, file_name=name, key=key)
 
 
-def render_change_password(user: db.UserRecord) -> None:
-    if not user.password_hash:
-        return
-    with st.expander("Change password"):
-        with st.form(f"change-password-{user.id}"):
-            current = st.text_input("Current password", type="password")
-            new_password = st.text_input("New password", type="password")
-            change = st.form_submit_button("Change password")
-        if not change:
-            return
-        try:
-            auth.change_password(user.id, current, new_password)
-        except auth.AuthError as exc:
-            st.error(str(exc))
-            return
-        st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
-        st.session_state.password_updated = True
-        st.rerun()
-
-
 def render_model_settings(user: db.UserRecord) -> None:
     model, effort = db.model_settings(user.id)
     models = config.model_options()
@@ -970,8 +1004,15 @@ def _save_model_settings(user_id: str) -> None:
 
 
 def render_account(user: db.UserRecord) -> None:
-    if st.session_state.pop("password_updated", False):
+    if st.session_state.get("password_updated"):
         st.success("Password updated. Other sessions were signed out.")
+        # Saving the new session cookie reruns the app once. Keep the note through that run.
+        shown = int(st.session_state.get("password_notice_runs", 0)) + 1
+        if shown >= 2:
+            st.session_state.password_updated = False
+            st.session_state.password_notice_runs = 0
+        else:
+            st.session_state.password_notice_runs = shown
     used, limit, calls, call_limit = db.usage_today(user.id)
     st.caption(f"{used} of {limit} interviews started today. {calls} of {call_limit} interviewer replies.")
     if mailer.configured() and user.password_hash and user.email_verified_at is None:
@@ -983,23 +1024,49 @@ def render_account(user: db.UserRecord) -> None:
             except Exception:
                 st.error("The email could not be sent.")
     with st.expander("Account"):
-        export = db.export_account(user.id)
-        st.download_button(
-            "Download my data",
-            data=json.dumps(export, indent=2).encode("utf-8"),
-            file_name="interview-practice.json",
-            mime="application/json",
-            key=f"export_{user.id}",
+        st.markdown("<div class='account-panel'></div>", unsafe_allow_html=True)
+        download_tab, delete_tab, password_tab = st.tabs(
+            ["Download my data", "Delete account", "Change password"]
         )
-        st.caption("Deleting the account removes the résumé, interviews, and stored files.")
-        confirm = st.text_input("Type your email to delete the account", key=f"delete_email_{user.id}")
-        if st.button("Delete account", key=f"delete_{user.id}"):
-            if confirm.strip().lower() != user.email:
-                st.error("Type the account email to confirm.")
+        with download_tab:
+            st.caption("A JSON file of your profile and interviews. Passwords are not included.")
+            export = db.export_account(user.id)
+            st.download_button(
+                "Download my data",
+                data=json.dumps(export, indent=2).encode("utf-8"),
+                file_name="interview-practice.json",
+                mime="application/json",
+                key=f"export_{user.id}",
+            )
+        with delete_tab:
+            st.caption("This removes the résumé, interviews, and stored files.")
+            confirm = st.text_input("Type your email to confirm", key=f"delete_email_{user.id}")
+            if st.button("Delete account", key=f"delete_{user.id}"):
+                if confirm.strip().lower() != user.email:
+                    st.error("Type the account email to confirm.")
+                else:
+                    db.delete_account(user.id)
+                    request_logout()
+        with password_tab:
+            if user.password_hash:
+                with st.form("change-password"):
+                    current = st.text_input("Current password", type="password")
+                    new_password = st.text_input("New password", type="password")
+                    change = st.form_submit_button("Change password")
+                if change:
+                    try:
+                        auth.change_password(user.id, current, new_password)
+                    except auth.AuthError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state.pending_cookie = auth.open_session(user.id, config.auth_cookie_secret())
+                        st.session_state.password_updated = True
+                        st.session_state.password_notice_runs = 0
+                        st.rerun()
             else:
-                db.delete_account(user.id)
-                request_logout()
-        if config.is_admin(user.email):
+                st.caption("This account signs in with Google, so there is no password to change.")
+    if config.is_admin(user.email):
+        with st.expander("Messages and problems"):
             st.markdown("**Messages**")
             messages = db.recent_contact_messages()
             if not messages:
